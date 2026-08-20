@@ -1,0 +1,6 @@
+{
+  "name": "viadia",
+  "description": "Viadia - Plan. Track. Share. Every Trip. AI-powered itinerary planning, real-time expense sharing, multi-currency budget tracking, and travel checklists.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

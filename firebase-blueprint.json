@@ -1,0 +1,447 @@
+{
+  "entities": {
+    "UserDetails": {
+      "title": "UserDetails",
+      "description": "User core profile including unique sequential userCode for authenticated accounts.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique user ID from Firebase auth or local guest session."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Google email used for sign-in, or null for guests."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "User's preferred display name."
+        },
+        "userCode": {
+          "type": "string",
+          "pattern": "^U[A-Z]+[0-9]{6}$",
+          "description": "Sequentially generated unique identifier used as config key (e.g. UA000001, UB000001)."
+        },
+        "authProvider": {
+          "type": "string",
+          "enum": ["google", "apple", "guest"],
+          "description": "Authentication provider used by the user."
+        },
+        "adTier": {
+          "type": "boolean",
+          "description": "True if user is on ad-free / lifetime pass tier, false for ad-supported tier."
+        },
+        "userTier": {
+          "type": "string",
+          "description": "Subscription membership tier name."
+        },
+        "subscription_tier": {
+          "type": "string",
+          "description": "Subscription plan type (e.g. 1_year, 2_year, 3_year, 5_year, lifetime, free)."
+        },
+        "sub_start_date": {
+          "type": "string",
+          "description": "Subscription starting ISO date string (YYYY-MM-DD)."
+        },
+        "sub_end_date": {
+          "type": "string",
+          "description": "Subscription expiration ISO date string (YYYY-MM-DD)."
+        }
+      },
+      "required": ["uid", "name"]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "Available Pro ad-free subscription plans with duration, original price, discounted price, and currency.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique plan ID (e.g., 1_year, 2_year, 3_year, 5_year, lifetime)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-friendly plan name (e.g., 1 Year Pro, Lifetime Pass)."
+        },
+        "durationYears": {
+          "type": "number",
+          "description": "Duration in years (99 for lifetime)."
+        },
+        "originalPrice": {
+          "type": "number",
+          "description": "Base price before discount."
+        },
+        "discountedPrice": {
+          "type": "number",
+          "description": "Active promotional or discounted price."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code (e.g., USD)."
+        },
+        "type": {
+          "type": "string",
+          "description": "Membership tier identifier."
+        },
+        "badge": {
+          "type": "string",
+          "description": "Optional badge label (e.g., POPULAR, BEST VALUE)."
+        }
+      },
+      "required": ["id", "name", "durationYears", "originalPrice", "discountedPrice", "currency", "type"]
+    },
+    "SubscriptionTransaction": {
+      "title": "SubscriptionTransaction",
+      "description": "Ledger of successful membership and pass purchase transactions.",
+      "type": "object",
+      "properties": {
+        "transactionId": {
+          "type": "string",
+          "description": "Unique transaction identification string."
+        },
+        "userCode": {
+          "type": "string",
+          "description": "User code of the purchaser."
+        },
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the purchaser."
+        },
+        "userEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Email address of the purchaser."
+        },
+        "userName": {
+          "type": "string",
+          "description": "Display name of the purchaser."
+        },
+        "planId": {
+          "type": "string",
+          "description": "Purchased plan ID (e.g., 1_year, 2_year, 3_year, 5_year, lifetime)."
+        },
+        "planName": {
+          "type": "string",
+          "description": "Human-readable purchased plan title."
+        },
+        "planType": {
+          "type": "string",
+          "description": "Membership tier code."
+        },
+        "durationYears": {
+          "type": "number",
+          "description": "Duration in years granted by this transaction."
+        },
+        "amountPaid": {
+          "type": "number",
+          "description": "Actual monetary amount charged."
+        },
+        "originalPrice": {
+          "type": "number",
+          "description": "Regular catalog price before discounts."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency of transaction (e.g. USD)."
+        },
+        "planStartDate": {
+          "type": "string",
+          "description": "ISO date string when the purchased period begins."
+        },
+        "planEndDate": {
+          "type": "string",
+          "description": "ISO date string when the purchased period expires."
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Payment gateway or billing channel used (e.g., google_play, apple_pay)."
+        },
+        "orderId": {
+          "type": "string",
+          "description": "External payment gateway order reference ID."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["completed", "pending", "refunded", "failed"],
+          "description": "Status of the purchase transaction."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the transaction was completed."
+        }
+      },
+      "required": ["transactionId", "userCode", "planId", "planName", "amountPaid", "currency", "planStartDate", "planEndDate", "status", "createdAt"]
+    },
+    "DeletedUserDetails": {
+      "title": "DeletedUserDetails",
+      "description": "Archived user record stored upon account deletion to preserve membership tier and userCode upon reactivation.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "name": {
+          "type": "string"
+        },
+        "userCode": {
+          "type": "string"
+        },
+        "adTier": {
+          "type": "boolean"
+        },
+        "userTier": {
+          "type": "string"
+        },
+        "deletedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["uid", "deletedAt"]
+    },
+    "UserConfig": {
+      "title": "UserConfig",
+      "description": "Stores user configurations and global checklist keyed by userCode.",
+      "type": "object",
+      "properties": {
+        "userCode": {
+          "type": "string",
+          "pattern": "^UA[0-9]{6}$",
+          "description": "The userCode matching the UserDetails."
+        },
+        "globalChecklist": {
+          "type": "array",
+          "description": "Global checklist template across all travels."
+        }
+      },
+      "required": ["userCode", "globalChecklist"]
+    },
+    "UserTripcodeMaster": {
+      "title": "UserTripcodeMaster",
+      "description": "List of trip codes created by a specific user code.",
+      "type": "object",
+      "properties": {
+        "userCode": {
+          "type": "string",
+          "pattern": "^UA[0-9]{6}$"
+        },
+        "tripCodes": {
+          "type": "array",
+          "description": "List of 6-character trip codes created by this user."
+        }
+      },
+      "required": ["userCode", "tripCodes"]
+    },
+    "TripMaster": {
+      "title": "TripMaster",
+      "description": "Global directory mapping unique trip codes to their creator and edit permissions.",
+      "type": "object",
+      "properties": {
+        "tripCode": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "ownerUid": {
+          "type": "string",
+          "description": "The Firebase UID of the user who created this trip."
+        },
+        "allowOthersToModify": {
+          "type": "boolean",
+          "description": "Whether other users or guests are allowed to modify this trip."
+        }
+      },
+      "required": ["tripCode", "ownerUid", "allowOthersToModify"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Full travel planner itinerary, companion log, expenses, and schedule details.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique random ID for the trip instance."
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{6}$",
+          "description": "The 6-character alphanumeric share code and document ID."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Title of the travel adventure."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "High-level summary of the trip."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["planned", "active", "completed"]
+        },
+        "startDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "endDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "countries": {
+          "type": "array"
+        },
+        "miles": {
+          "type": "number"
+        },
+        "travelers": {
+          "type": "array"
+        },
+        "timeline": {
+          "type": "array"
+        },
+        "expenses": {
+          "type": "array"
+        },
+        "checklist": {
+          "type": "array",
+          "description": "Checklist specific to this trip instance (does NOT contain the global travel checklist)."
+        }
+      },
+      "required": ["id", "title", "code", "startDate", "endDate", "travelers", "timeline", "expenses", "checklist"]
+    },
+    "TripGclistStyling": {
+      "title": "TripGclistStyling",
+      "description": "Dictionary keyed by tripCode storing copy of global checklist and trip styling JSON.",
+      "type": "object",
+      "properties": {
+        "tripCode": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "gclist": {
+          "type": "array",
+          "description": "Copy of global checklist for this trip."
+        },
+        "styling": {
+          "type": "object",
+          "description": "Styling JSON for timeline clothing."
+        }
+      },
+      "required": ["tripCode"]
+    },
+    "InboundMessage": {
+      "title": "InboundMessage",
+      "description": "Feedback, support, or contact messages submitted by users through the app.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "userCode": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "IsResolved": {
+          "type": "boolean",
+          "description": "Indicates whether the inbound message has been resolved."
+        },
+        "Response": {
+          "type": "string",
+          "description": "Support response message sent back to the user."
+        }
+      },
+      "required": ["message", "createdAt"]
+    },
+    "SeriesCodeCounter": {
+      "title": "SeriesCodeCounter",
+      "description": "Tracks the next available SERIES_CODE letter and SERIES_NUMBER for user code generation.",
+      "type": "object",
+      "properties": {
+        "SERIES_CODE": {
+          "type": "string",
+          "description": "The next available series code letter (e.g. 'A', 'B')."
+        },
+        "SERIES_NUMBER": {
+          "type": "number",
+          "description": "The next available series sequence integer (1 to 999999)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["SERIES_CODE", "SERIES_NUMBER"]
+    }
+  },
+  "firestore": {
+    "/series_code/{id}": {
+      "schema": "SeriesCodeCounter",
+      "description": "Global counter collection storing the next available SERIES_CODE and SERIES_NUMBER."
+    },
+    "/users/{uid}": {
+      "schema": "UserDetails",
+      "description": "Collection of user identities and generated sequence codes."
+    },
+    "/deleted_users/{uid}": {
+      "schema": "DeletedUserDetails",
+      "description": "Collection of soft-deleted user records to enable seamless account reactivation and license retention."
+    },
+    "/user_configs/{userCode}": {
+      "schema": "UserConfig",
+      "description": "Collection of global checklist data indexed by userCode."
+    },
+    "/user_tripcode_master/{userCode}": {
+      "schema": "UserTripcodeMaster",
+      "description": "Collection mapping userCode to a list of tripCodes they have created."
+    },
+    "/trip_master/{tripCode}": {
+      "schema": "TripMaster",
+      "description": "Dictionary of unique trip id and corresponding user id who created it and the edit permission flag."
+    },
+    "/trips/{tripCode}": {
+      "schema": "Trip",
+      "description": "Main travel document containing schedules, expenses, and timeline, keyed by uppercase trip code."
+    },
+    "/trip_gclist_styling/{tripCode}": {
+      "schema": "TripGclistStyling",
+      "description": "Dictionary mapping tripCode to list of two JSONs: [copy of global checklist, trip styling JSON]."
+    },
+    "/inbound_messages/{messageId}": {
+      "schema": "InboundMessage",
+      "description": "Collection of user feedback, contact us, and support inquiries."
+    },
+    "/subscription_plans/{planId}": {
+      "schema": "SubscriptionPlan",
+      "description": "Configurable collection of available Pro membership tiers and pricing options."
+    },
+    "/transactions/{transactionId}": {
+      "schema": "SubscriptionTransaction",
+      "description": "Ledger of user plan purchases and membership billing transactions."
+    }
+  }
+}

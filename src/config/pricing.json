@@ -1,0 +1,11 @@
+{
+  "lifetimePass": {
+    "amount": 19.99,
+    "currency": "USD",
+    "currencySymbol": "$",
+    "originalAmount": 49.99,
+    "discountBadge": "SAVE 60%",
+    "tierName": "PRO Pass",
+    "billingLabel": "One-Time Payment • Pay Once, Own Forever"
+  }
+}

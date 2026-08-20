@@ -1,0 +1,422 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+html, body {
+  background-color: #F0F0F0;
+  color: #0f172a;
+  overscroll-behavior-y: bounce;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+.dark body {
+  background-color: #010101;
+  color: #f8fafc;
+  --color-slate-400: #AAAAAA;
+  --color-slate-500: #AAAAAA;
+  --color-gray-400: #AAAAAA;
+  --color-gray-500: #AAAAAA;
+}
+
+.dark {
+  --color-slate-400: #AAAAAA;
+  --color-slate-500: #AAAAAA;
+  --color-gray-400: #AAAAAA;
+  --color-gray-500: #AAAAAA;
+}
+
+/* Secondary / Muted text in dark mode application-wide */
+.dark .text-slate-400,
+.dark .text-slate-500,
+.dark .text-slate-300,
+.dark .text-gray-400,
+.dark .text-gray-500,
+.dark .text-zinc-400,
+.dark .text-neutral-400,
+:where(.dark, .dark *) :is(
+  .dark\:text-slate-300,
+  .dark\:text-slate-400,
+  .dark\:text-slate-500,
+  .dark\:text-gray-400,
+  .dark\:text-gray-500,
+  .dark\:text-zinc-400,
+  .dark\:text-neutral-400
+) {
+  color: #AAAAAA;
+}
+
+.scroll-bounce,
+.overflow-y-auto {
+  overscroll-behavior-y: bounce;
+  -webkit-overflow-scrolling: touch;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+:root {
+  /* Default: viadia Violet & Teal Harmony Theme */
+  --theme-50: #eef2ff;
+  --theme-100: #e0e7ff;
+  --theme-150: #d0d7ff;
+  --theme-200: #c7d2fe;
+  --theme-400: #818cf8;
+  --theme-500: #6366f1;
+  --theme-600: #4f46e5;
+  --theme-700: #4338ca;
+  --theme-900: #1e1b4b;
+  --theme-950: #0f172a;
+}
+
+.theme-indigo {
+  --theme-50: #eef2ff;
+  --theme-100: #e0e7ff;
+  --theme-150: #d0d7ff;
+  --theme-200: #c7d2fe;
+  --theme-400: #818cf8;
+  --theme-500: #6366f1;
+  --theme-600: #4f46e5;
+  --theme-700: #4338ca;
+  --theme-900: #1e1b4b;
+  --theme-950: #0f172a;
+}
+
+.theme-emerald {
+  --theme-50: #ecfdf5;
+  --theme-100: #d1fae5;
+  --theme-150: #b1fae5;
+  --theme-200: #a7f3d0;
+  --theme-400: #34d399;
+  --theme-500: #10b981;
+  --theme-600: #059669;
+  --theme-700: #047857;
+  --theme-900: #064e3b;
+  --theme-950: #022c22;
+}
+
+.theme-amber {
+  --theme-50: #fffbeb;
+  --theme-100: #fef3c7;
+  --theme-150: #fdeac7;
+  --theme-200: #fde68a;
+  --theme-400: #fbbf24;
+  --theme-500: #f59e0b;
+  --theme-600: #d97706;
+  --theme-700: #b45309;
+  --theme-900: #78350f;
+  --theme-950: #451a03;
+}
+
+.theme-rose {
+  --theme-50: #fff1f2;
+  --theme-100: #ffe4e6;
+  --theme-150: #ffd4e6;
+  --theme-200: #fecdd3;
+  --theme-400: #f43f5e;
+  --theme-500: #f43f5e;
+  --theme-600: #e11d48;
+  --theme-700: #be123c;
+  --theme-900: #881337;
+  --theme-950: #4c0519;
+}
+
+.theme-ocean {
+  --theme-50: #eff4ff;
+  --theme-100: #dbe6fe;
+  --theme-150: #bfd3fe;
+  --theme-200: #93c5fd;
+  --theme-400: #4d7bd6;
+  --theme-500: #3b6bc9;
+  --theme-600: #3661b6;
+  --theme-700: #2a4c93;
+  --theme-900: #1c3261;
+  --theme-950: #0f1a34;
+}
+
+.theme-teal {
+  --theme-50: #f0fdfa;
+  --theme-100: #ccfbf1;
+  --theme-150: #99f6e4;
+  --theme-200: #5eead4;
+  --theme-400: #54cdbd;
+  --theme-500: #4bc0b0;
+  --theme-600: #38a899;
+  --theme-700: #2d887c;
+  --theme-900: #1c564f;
+  --theme-950: #0e2e2a;
+}
+
+.theme-violet {
+  --theme-50: #f5f3ff;
+  --theme-100: #ede9fe;
+  --theme-150: #ddd6fe;
+  --theme-200: #c4b5fd;
+  --theme-400: #8b62f0;
+  --theme-500: #7c53e5;
+  --theme-600: #6b3fd4;
+  --theme-700: #562cb5;
+  --theme-900: #391980;
+  --theme-950: #1d0a47;
+}
+
+
+.theme-monalisa {
+  --theme-50: #fdf4f3;
+  --theme-100: #fbe8e5;
+  --theme-150: #f7d2cd;
+  --theme-200: #f4bcb5;
+  --theme-400: #eeaa9f;
+  --theme-500: #ea9489;
+  --theme-600: #ea9489;
+  --theme-700: #b35c51;
+  --theme-900: #6f352d;
+  --theme-950: #3b1a15;
+}
+
+.theme-bright-lilac {
+  --theme-50: #faf5fd;
+  --theme-100: #f3e7fb;
+  --theme-150: #e7cdf7;
+  --theme-200: #ddb3f4;
+  --theme-400: #d4a4f0;
+  --theme-500: #cb96ec;
+  --theme-600: #cb96ec;
+  --theme-700: #925eb4;
+  --theme-900: #5a3574;
+  --theme-950: #301a40;
+}
+
+.theme-persian-pink {
+  --theme-50: #fdf4f9;
+  --theme-100: #fbe5f3;
+  --theme-150: #f7c6e6;
+  --theme-200: #f3a8d9;
+  --theme-400: #ee93cd;
+  --theme-500: #eb8ac9;
+  --theme-600: #eb8ac9;
+  --theme-700: #b1518f;
+  --theme-900: #6e2d58;
+  --theme-950: #3b142f;
+}
+
+.theme-midnight {
+  --theme-50: #f0f0ff;
+  --theme-100: #e0e0ff;
+  --theme-150: #c8c8fc;
+  --theme-200: #a5a5f8;
+  --theme-400: #5b4ec2;
+  --theme-500: #3a2a97;
+  --theme-600: #170c52;
+  --theme-700: #120942;
+  --theme-900: #0a0426;
+  --theme-950: #050214;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Specific theme colors */
+  --color-slate-50: #F0F0F0; /* Light theme background */
+  --color-white: #FCFCFC;    /* Light theme card colour */
+  --color-slate-800: #2a2a2e; /* Soft border & separators */
+  --color-slate-850: #222225;
+  --color-slate-900: #1B1B1B; /* Dark theme card */
+  --color-slate-950: #010101; /* Dark theme background */
+
+  --color-indigo-50: var(--theme-50);
+  --color-indigo-100: var(--theme-100);
+  --color-indigo-150: var(--theme-150);
+  --color-indigo-200: var(--theme-200);
+  --color-indigo-400: var(--theme-400);
+  --color-indigo-500: var(--theme-500);
+  --color-indigo-600: var(--theme-600);
+  --color-indigo-700: var(--theme-700);
+  --color-indigo-900: var(--theme-900);
+  --color-indigo-950: var(--theme-950);
+}
+
+@utility bg-grey-800 {
+  background-color: #1f2937;
+}
+@utility bg-grey-750 {
+  background-color: #2b3544;
+}
+@utility bg-gray-750 {
+  background-color: #2b3544;
+}
+@utility bg-slate-850 {
+  background-color: #131c2e;
+}
+
+/* Custom scrollbar rules: Hide scrollbars app-wide while keeping scrolling active */
+::-webkit-scrollbar {
+  display: none;
+}
+* {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+/* Leaflet modern premium popup & map controls customizations */
+.leaflet-control-zoom,
+.leaflet-bar,
+.leaflet-bar a,
+.leaflet-control-layers,
+.leaflet-control,
+.map-control-btn {
+  opacity: 0.7 !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  transition: opacity 0.2s ease, background-color 0.2s ease, transform 0.15s ease !important;
+}
+
+.leaflet-control-zoom:hover,
+.leaflet-bar:hover,
+.leaflet-bar a:hover,
+.leaflet-control-layers:hover,
+.leaflet-control:hover,
+.map-control-btn:hover {
+  opacity: 1 !important;
+}
+
+.leaflet-bar {
+  border-radius: 14px !important;
+  overflow: hidden !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
+}
+
+.dark .leaflet-bar {
+  border: 1px solid rgba(51, 65, 85, 0.8) !important;
+}
+
+.leaflet-bar a {
+  background-color: rgba(255, 255, 255, 0.7) !important;
+  color: #1e293b !important;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8) !important;
+}
+
+.dark .leaflet-bar a {
+  background-color: rgba(15, 23, 42, 0.7) !important;
+  color: #f1f5f9 !important;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.8) !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  border-radius: 12px !important;
+  color: #0f172a !important;
+  box-shadow: 0 8px 20px -4px rgba(15, 23, 42, 0.18) !important;
+}
+.dark .leaflet-popup-content-wrapper {
+  background: rgba(15, 23, 42, 0.7) !important;
+  border-color: rgba(51, 65, 85, 0.8) !important;
+  color: #f8fafc !important;
+}
+.leaflet-popup-content {
+  margin: 4px 6px !important;
+  line-height: 1.25 !important;
+}
+.leaflet-popup-tip {
+  background: rgba(255, 255, 255, 0.7) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+.dark .leaflet-popup-tip {
+  background: rgba(15, 23, 42, 0.7) !important;
+  border-color: rgba(51, 65, 85, 0.8) !important;
+}
+.leaflet-popup-close-button {
+  top: 4px !important;
+  right: 4px !important;
+  width: 18px !important;
+  height: 18px !important;
+  line-height: 16px !important;
+  text-align: center !important;
+  padding: 0 !important;
+  border-radius: 9999px !important;
+  color: #64748b !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  background: rgba(241, 245, 249, 0.9) !important;
+  border: 1px solid #cbd5e1 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+  transition: all 0.15s ease !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 30 !important;
+  text-decoration: none !important;
+}
+.leaflet-popup-close-button:hover {
+  color: #0f172a !important;
+  background: #e2e8f0 !important;
+  transform: scale(1.08) !important;
+}
+.dark .leaflet-popup-close-button {
+  color: #94a3b8 !important;
+  background: rgba(30, 41, 59, 0.9) !important;
+  border-color: #475569 !important;
+}
+.dark .leaflet-popup-close-button:hover {
+  color: #f8fafc !important;
+  background: #334155 !important;
+}
+.leaflet-container {
+  font-family: 'Inter', sans-serif !important;
+}
+
+/* Position Leaflet zoom controls at bottom-right corner above floating bottom cards */
+.leaflet-bottom.leaflet-right {
+  margin-bottom: 90px !important;
+  margin-right: 16px !important;
+}
+
+/* Media Print Styles for PDF Export */
+@media print {
+  body {
+    background: white !important;
+    color: #0f172a !important;
+  }
+  
+  /* Hide everything except the print workbook */
+  body * {
+    visibility: hidden;
+  }
+  
+  #trip-print-section, #trip-print-section * {
+    visibility: visible;
+  }
+  
+  #trip-print-section {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    display: block !important;
+    background: white !important;
+    color: #0f172a !important;
+    padding: 0 !important;
+  }
+
+  .page-break-after {
+    page-break-after: always;
+    break-after: page;
+  }
+}
+
+/* Custom Shine animation for the Gold luxury card */
+@keyframes shine {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shine {
+  animation: shine 1.6s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+

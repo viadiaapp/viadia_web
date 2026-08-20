@@ -1,0 +1,11 @@
+{
+  "heroVideo": {
+    "url": "/assets/video/viadia_hero.mp4",
+    "posterUrl": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80",
+    "autoPlay": true,
+    "loop": true,
+    "muted": true,
+    "playsInline": true,
+    "fallbackAssetLocation": "src/assets/homepage/fallback_poster.jpg"
+  }
+}
