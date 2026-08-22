@@ -22,8 +22,6 @@
     "@capacitor/screen-orientation": "^8.0.1",
     "@capacitor/share": "^8.0.1",
     "@capacitor/status-bar": "^8.0.3",
-    "@capacitor/haptics": "^6.0.0",
-    "@capacitor/ios": "^6.0.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
