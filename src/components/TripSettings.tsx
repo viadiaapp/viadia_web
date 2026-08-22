@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { Trip, Expense, ColorTheme } from '../types';
-import { Coins, Users, Layers, Wallet, ArrowRight, Plus, Trash2, Globe, ShieldCheck, Compass, DollarSign, HelpCircle, RefreshCw, FileText, FileSpreadsheet, Download, Check, X, Info, Calendar, ChevronDown, ChevronUp, CheckSquare, Building2 } from 'lucide-react';
+import { Coins, Users, Layers, Wallet, ArrowRight, Plus, Trash2, Globe, ShieldCheck, Compass, DollarSign, HelpCircle, RefreshCw, FileText, FileSpreadsheet, Download, Check, X, Info, Calendar, ChevronDown, ChevronUp, CheckSquare, Building2, CheckCircle2, Clock, Ban, Flag } from 'lucide-react';
 import DateRangePicker from './DateRangePicker';
 import { getStaticCurrencies, getUserDetails } from '../lib/db';
 import { isOwnerOfTrip } from '../lib/auth';
-import { StaticCurrency } from '../data/staticCurrencies';
+import { StaticCurrency, staticCurrenciesSeed } from '../data/staticCurrencies';
 import { getTripTimingState, getAllowedStatuses, computeAutoStatus, isStatusValidForDates } from '../lib/tripUtils';
 import { generateTripPdf } from '../lib/pdfGenerator';
 import { generateDataPdf } from '../lib/dataPdfGenerator';
@@ -13,6 +13,8 @@ import { downloadExpensesCSV } from '../lib/csvExport';
 import { reconcileDailyHotelStops } from '../lib/hotelStopsUtils';
 import { useBackButton } from '../lib/backButtonHandler';
 import { fetchLiveForexRates } from '../lib/apiUtils';
+import { SelectionBottomSheet, SelectOption } from './SelectionBottomSheet';
+import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
 
 interface TripSettingsProps {
   trips: { [id: string]: Trip };
@@ -23,6 +25,34 @@ interface TripSettingsProps {
   user?: any;
   colorTheme?: ColorTheme;
 }
+
+const CURRENCY_FLAG_MAP = new Map<string, string>();
+const PRIORITY_CURRENCY_FLAGS: { [code: string]: string } = {
+  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', INR: '🇮🇳', AUD: '🇦🇺', CAD: '🇨🇦',
+  JPY: '🇯🇵', CNY: '🇨🇳', CHF: '🇨🇭', NZD: '🇳🇿', SGD: '🇸🇬', HKD: '🇭🇰',
+  SEK: '🇸🇪', KRW: '🇰🇷', NOK: '🇳🇴', MXN: '🇲🇽', BRL: '🇧🇷', ZAR: '🇿🇦',
+  AED: '🇦🇪', THB: '🇹🇭',
+};
+
+staticCurrenciesSeed.forEach((c) => {
+  if (c.currencyCode && c.flagEmoji) {
+    const code = c.currencyCode.toUpperCase();
+    if (!CURRENCY_FLAG_MAP.has(code)) {
+      CURRENCY_FLAG_MAP.set(code, c.flagEmoji);
+    }
+  }
+});
+
+Object.entries(PRIORITY_CURRENCY_FLAGS).forEach(([code, flag]) => {
+  CURRENCY_FLAG_MAP.set(code, flag);
+});
+
+const STATUS_ICONS: { [key: string]: React.ReactNode } = {
+  planned: <Clock className="h-4 w-4 text-indigo-500" />,
+  active: <CheckCircle2 className="h-4 w-4 text-emerald-500" />,
+  completed: <Flag className="h-4 w-4 text-blue-500" />,
+  cancelled: <Ban className="h-4 w-4 text-rose-500" />,
+};
 
 export default function TripSettings({
   trips,
@@ -48,7 +78,6 @@ export default function TripSettings({
     load();
   }, []);
 
-  // Auto-reconcile status if trip dates require it (unless explicitly cancelled or read-only)
   useEffect(() => {
     if (!activeTrip || isReadOnly) return;
     if (activeTrip.status === 'cancelled') return;
@@ -113,39 +142,12 @@ export default function TripSettings({
     return Number((fTo / fFrom).toFixed(6));
   };
 
-  const getThemeTextClass = () => {
-    switch (colorTheme) {
-      case 'emerald': return 'text-emerald-600 dark:text-emerald-400';
-      case 'amber': return 'text-amber-600 dark:text-amber-400';
-      case 'rose': return 'text-rose-600 dark:text-rose-400';
-      default: return 'text-indigo-600 dark:text-indigo-400';
-    }
-  };
-
   const getThemeCheckboxClass = () => {
     switch (colorTheme) {
       case 'emerald': return 'text-emerald-600 focus:ring-emerald-500';
       case 'amber': return 'text-amber-600 focus:ring-amber-500';
       case 'rose': return 'text-rose-600 focus:ring-rose-500';
       default: return 'text-indigo-600 focus:ring-indigo-500';
-    }
-  };
-
-  const getThemeBgClass = () => {
-    switch (colorTheme) {
-      case 'emerald': return 'bg-emerald-600';
-      case 'amber': return 'bg-amber-600';
-      case 'rose': return 'bg-rose-600';
-      default: return 'bg-indigo-600';
-    }
-  };
-
-  const getThemeFocusBorderClass = () => {
-    switch (colorTheme) {
-      case 'emerald': return 'focus:border-emerald-500';
-      case 'amber': return 'focus:border-amber-500';
-      case 'rose': return 'focus:border-rose-500';
-      default: return 'focus:border-indigo-500';
     }
   };
 
@@ -175,6 +177,10 @@ export default function TripSettings({
   const [categoryError, setCategoryError] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
 
+  // BottomSheet Picker states
+  const [isStatusPickerOpen, setIsStatusPickerOpen] = useState(false);
+  const [isQuoteCurrencyPickerOpen, setIsQuoteCurrencyPickerOpen] = useState(false);
+
   // Collapsible sections state
   const [isTripStatusCollapsed, setIsTripStatusCollapsed] = useState(true);
   const [isTravelDatesCollapsed, setIsTravelDatesCollapsed] = useState(true);
@@ -184,7 +190,7 @@ export default function TripSettings({
   const [isExpenseCategoriesCollapsed, setIsExpenseCategoriesCollapsed] = useState(true);
   const [isPaymentCategoriesCollapsed, setIsPaymentCategoriesCollapsed] = useState(true);
   const [isHotelScheduleCollapsed, setIsHotelScheduleCollapsed] = useState(true);
-  const [isCsvExportCollapsed, setIsCsvExportCollapsed] = useState(false);
+  const [isCsvExportCollapsed, setIsCsvExportCollapsed] = useState(true);
   const [csvExportSuccess, setCsvExportSuccess] = useState(false);
   const [isPdfExportCollapsed, setIsPdfExportCollapsed] = useState(true);
 
@@ -197,29 +203,11 @@ export default function TripSettings({
     }, 2500);
   };
 
-  // PDF Workbook Export States (Moved to the very last of TripSettings!)
+  // PDF Workbook Export States
   const [exportIncludePlanner, setExportIncludePlanner] = useState(true);
   const [exportIncludeExpenses, setExportIncludeExpenses] = useState(true);
   const [exportIncludeBudget, setExportIncludeBudget] = useState(true);
-  const [isCompiling, setIsCompiling] = useState(false);
   const [isCompilingDataPdf, setIsCompilingDataPdf] = useState(false);
-
-  const handleExportPDF = async () => {
-    if (!activeTrip) return;
-    setIsCompiling(true);
-    try {
-      await generateTripPdf(activeTrip, {
-        includePlanner: exportIncludePlanner,
-        includeExpenses: exportIncludeExpenses,
-        includeBudget: exportIncludeBudget,
-        includeChecklist: true,
-      });
-    } catch (err) {
-      console.error("Failed to generate PDF:", err);
-    } finally {
-      setIsCompiling(false);
-    }
-  };
 
   const handleExportDataPDF = async () => {
     if (!activeTrip) return;
@@ -238,19 +226,18 @@ export default function TripSettings({
     }
   };
 
-  // States for currency toggle and interactive date editing
   const [showCurrenciesList, setShowCurrenciesList] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [pendingDates, setPendingDates] = useState<{ start: string; end: string } | null>(null);
   const [showShortenWarning, setShowShortenWarning] = useState(false);
   const [shortenedItemsCount, setShortenedItemsCount] = useState({ stops: 0, expenses: 0 });
 
-  // Sub-overlays & modals back button handlers
   useBackButton('trip-settings-shorten-warning', showShortenWarning, () => setShowShortenWarning(false), 110);
   useBackButton('trip-settings-date-picker', showDatePicker, () => setShowDatePicker(false), 110);
   useBackButton('trip-settings-currencies-list', showCurrenciesList, () => setShowCurrenciesList(false), 110);
+  useBackButton('trip-settings-status-picker', isStatusPickerOpen, () => setIsStatusPickerOpen(false), 110);
+  useBackButton('trip-settings-quote-curr-picker', isQuoteCurrencyPickerOpen, () => setIsQuoteCurrencyPickerOpen(false), 110);
 
-  // States for Daily Hotel Start & End Stops
   const [hotelStopsEnabled, setHotelStopsEnabled] = useState(false);
   const [hotelStartTimeInput, setHotelStartTimeInput] = useState('09:00');
   const [hotelEndTimeInput, setHotelEndTimeInput] = useState('21:00');
@@ -294,6 +281,30 @@ export default function TripSettings({
     updateActiveTrip(reconciled);
   };
 
+  const statusOptions: SelectOption[] = useMemo(() => {
+    const allStatuses = [
+      { value: 'planned', label: 'Planned', sublabel: 'Upcoming journey schedule' },
+      { value: 'active', label: 'Active', sublabel: 'Currently ongoing trip' },
+      { value: 'completed', label: 'Completed', sublabel: 'Finished exploration' },
+      { value: 'cancelled', label: 'Cancelled', sublabel: 'Trip has been called off' },
+    ];
+    return allStatuses
+      .filter((s) => allowedStatuses.includes(s.value as any))
+      .map((s) => ({
+        ...s,
+        icon: STATUS_ICONS[s.value],
+      }));
+  }, [allowedStatuses]);
+
+  const bottomSheetCurrencies = useMemo(() => {
+    return CURRENCIES.map((c) => ({
+      code: c.code,
+      name: c.name,
+      symbol: c.symbol,
+      flag: CURRENCY_FLAG_MAP.get(c.code.toUpperCase()) || '🌐',
+    }));
+  }, [CURRENCIES]);
+
   if (!activeTrip) {
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-8 rounded-[32px] text-center max-w-lg mx-auto shadow-sm space-y-4">
@@ -319,10 +330,8 @@ export default function TripSettings({
 
   const checkDateShortening = (newStart: string, newEnd: string) => {
     if (!activeTrip) return;
-    
     const oldStart = activeTrip.startDate || '';
     const oldEnd = activeTrip.endDate || '';
-    
     const isShortened = (newStart > oldStart) || (newEnd < oldEnd);
     
     if (isShortened) {
@@ -341,24 +350,19 @@ export default function TripSettings({
       setPendingDates({ start: newStart, end: newEnd });
       setShowShortenWarning(true);
     } else {
-      // Extended or unchanged duration
       applyNewDates(newStart, newEnd);
     }
   };
 
   const applyNewDates = (newStart: string, newEnd: string) => {
     if (!activeTrip) return;
-    
-    // Keep unscheduled timeline stops, delete scheduled stops that are outside the new range
     const updatedTimeline = (activeTrip.timeline || []).filter(p => {
       if (!p.time) return true;
       const d = p.time.split('T')[0];
       return d >= newStart && d <= newEnd;
     });
     
-    // Retain all expenses; those outside the new range will naturally move to before/after groups
     const updatedExpenses = activeTrip.expenses || [];
-    
     const autoStatus = computeAutoStatus(newStart, newEnd, activeTrip.status);
 
     const tempTripObj: Trip = {
@@ -375,27 +379,21 @@ export default function TripSettings({
       : tempTripObj;
 
     updateActiveTrip(finalTripObj);
-    
     setPendingDates(null);
     setShowShortenWarning(false);
   };
 
-  const handleBaseCurrencyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const nextBase = e.target.value.toUpperCase();
+  const handleBaseCurrencyChange = (nextBaseCode: string) => {
+    const nextBase = nextBaseCode.toUpperCase();
     if (!activeTrip) return;
     const oldBase = (activeTrip.baseCurrency || 'USD').toUpperCase();
     if (nextBase === oldBase) return;
 
-    // Build the updated list of currencies.
-    // We want the new base currency, the old base currency (since it becomes a target/foreign currency),
-    // and any other foreign currencies currently selected (excluding the new base).
     const currentCurrencies = activeTrip.currencies || [];
     const targetCurrencies = currentCurrencies.filter(c => c !== nextBase && c !== oldBase);
     const nextCurrencies = Array.from(new Set([nextBase, oldBase, ...targetCurrencies]));
 
     const nextRates: { [currency: string]: number } = { [nextBase]: 1.0 };
-    
-    // Recalculate offline fallback exchange rates relative to the new base
     nextCurrencies.forEach(c => {
       if (c !== nextBase) {
         nextRates[c] = getOfflineFallbackRate(nextBase, c);
@@ -472,7 +470,6 @@ export default function TripSettings({
     }
   };
 
-  // Companions Management
   const handleAddTraveler = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTrip || !newTravelerName.trim()) return;
@@ -499,7 +496,6 @@ export default function TripSettings({
     updateActiveTrip({ travelers: activeTrip.travelers.filter(p => p !== name) });
   };
 
-  // Categories Management
   const handleAddCategory = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTrip || !newCategoryName.trim()) return;
@@ -531,7 +527,6 @@ export default function TripSettings({
     updateActiveTrip({ categories: categoriesList.filter(c => c !== catName) });
   };
 
-  // Payment Types Management
   const handleAddPaymentType = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeTrip || !newPaymentTypeName.trim()) return;
@@ -567,7 +562,7 @@ export default function TripSettings({
 
   return (
     <div className="w-full space-y-6 text-left">
-      {/* 1. Trip Share Settings Card (Only for signed in users) */}
+      {/* 1. Trip Share Settings Card */}
       {user && user.email && (
         <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
           <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2">
@@ -610,7 +605,6 @@ export default function TripSettings({
         </div>
       )}
 
-      {/* Read Only Notice before Trip Status */}
       {isReadOnly && (
         <div className="p-3.5 bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/50 rounded-2xl text-amber-800 dark:text-amber-300 text-xs text-left space-y-1">
           <p className="font-medium">
@@ -619,7 +613,7 @@ export default function TripSettings({
         </div>
       )}
 
-      {/* 2. Trip Status Card (Collapsible) */}
+      {/* 2. Trip Status Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -631,13 +625,14 @@ export default function TripSettings({
           </h3>
           <div className="flex items-center space-x-2">
             {isTripStatusCollapsed && (
-              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-                {activeTrip.status || 'planned'}
+              <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                {STATUS_ICONS[activeTrip.status || 'planned']}
+                <span>{activeTrip.status || 'planned'}</span>
               </span>
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Trip Status"
             >
               {isTripStatusCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -652,22 +647,19 @@ export default function TripSettings({
             </p>
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Current Status</label>
-              <select
-                value={activeTrip.status || 'planned'}
-                onChange={(e) => {
-                  const val = e.target.value as any;
-                  if (isStatusValidForDates(val, activeTrip.startDate, activeTrip.endDate)) {
-                    updateActiveTrip({ status: val });
-                  }
-                }}
+              
+              <button
+                type="button"
+                onClick={() => !isReadOnly && setIsStatusPickerOpen(true)}
                 disabled={isReadOnly}
-                className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 disabled:opacity-50"
+                className="w-full flex items-center justify-between text-xs px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {allowedStatuses.includes('planned') && <option value="planned">Planned</option>}
-                {allowedStatuses.includes('active') && <option value="active">Active</option>}
-                {allowedStatuses.includes('completed') && <option value="completed">Completed</option>}
-                {allowedStatuses.includes('cancelled') && <option value="cancelled">Cancelled</option>}
-              </select>
+                <span className="flex items-center space-x-2 truncate capitalize">
+                  <span>{STATUS_ICONS[activeTrip.status || 'planned']}</span>
+                  <span>{activeTrip.status || 'planned'}</span>
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+              </button>
 
               <div className="p-3 rounded-xl bg-slate-100/70 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800 text-xs space-y-1">
                 {timing === 'ongoing' && (
@@ -692,7 +684,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 3. Travel Dates Card (Collapsible) */}
+      {/* 3. Travel Dates Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left relative">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -710,7 +702,7 @@ export default function TripSettings({
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Travel Dates"
             >
               {isTravelDatesCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -764,7 +756,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 4. Travellers Card (Collapsible) */}
+      {/* 4. Travelers Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -782,7 +774,7 @@ export default function TripSettings({
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Travelers"
             >
               {isTravelersCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -813,7 +805,7 @@ export default function TripSettings({
               <button
                 type="submit"
                 disabled={isReadOnly}
-                className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Add</span>
@@ -843,7 +835,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 5. Trip Budget Limit Card (Collapsible) */}
+      {/* 5. Trip Budget Limit Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -861,7 +853,7 @@ export default function TripSettings({
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Trip Budget Limit"
             >
               {isBudgetCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -889,7 +881,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 6. Currency & Forex Settings Card (Collapsible) */}
+      {/* 6. Currency & Forex Settings Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -901,13 +893,14 @@ export default function TripSettings({
           </h3>
           <div className="flex items-center space-x-2">
             {isCurrencyCollapsed && (
-              <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400">
-                Base: {activeTrip.baseCurrency || 'USD'}
+              <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 flex items-center gap-1.5">
+                <span>{CURRENCY_FLAG_MAP.get((activeTrip.baseCurrency || 'USD').toUpperCase()) || '🌐'}</span>
+                <span>Base: {activeTrip.baseCurrency || 'USD'}</span>
               </span>
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Currency Settings"
             >
               {isCurrencyCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -917,23 +910,28 @@ export default function TripSettings({
 
         {!isCurrencyCollapsed && (
           <>
-            {/* Base Currency Selection */}
+            {/* Quote / Base Currency Selection via CurrencyPickerBottomSheet */}
             <div className="space-y-1">
               <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Quote Currency</label>
-              <select
-                value={activeTrip.baseCurrency || 'USD'}
-                onChange={handleBaseCurrencyChange}
+              <button
+                type="button"
+                onClick={() => !isReadOnly && setIsQuoteCurrencyPickerOpen(true)}
                 disabled={isReadOnly}
-                className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-slate-100 outline-none focus:border-indigo-500 disabled:opacity-50"
+                className="w-full flex items-center justify-between text-xs px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {CURRENCIES.map(c => (
-                  <option key={c.code} value={c.code}>{c.code} - {c.name} ({c.symbol})</option>
-                ))}
-              </select>
+                <span className="flex items-center space-x-2 truncate">
+                  <span className="text-base">{CURRENCY_FLAG_MAP.get((activeTrip.baseCurrency || 'USD').toUpperCase()) || '🌐'}</span>
+                  <span className="font-mono">{activeTrip.baseCurrency || 'USD'}</span>
+                  <span className="text-slate-400 font-normal">
+                    — {CURRENCIES.find(c => c.code === (activeTrip.baseCurrency || 'USD'))?.name || ''} ({CURRENCIES.find(c => c.code === (activeTrip.baseCurrency || 'USD'))?.symbol || '$'})
+                  </span>
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0 ml-2" />
+              </button>
               <p className="text-[9px] text-slate-400 dark:text-slate-500">Changing base currency will recalculate other rates dynamically.</p>
             </div>
 
-            {/* Add Target Currencies - Collapsed by Default */}
+            {/* Add Target Currencies Multi-Select with Flag & Code format */}
             <div className="space-y-2.5 pt-2 border-t border-slate-100 dark:border-slate-800/80">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase block">Required Currencies</label>
@@ -952,6 +950,7 @@ export default function TripSettings({
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border border-slate-200 dark:border-slate-800 rounded-xl p-3 bg-slate-50 dark:bg-slate-950/40 max-h-44 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-150">
                   {CURRENCIES.filter(c => c.code !== (activeTrip.baseCurrency || 'USD')).map(c => {
                     const isSelected = (activeTrip.currencies || []).includes(c.code);
+                    const flag = CURRENCY_FLAG_MAP.get(c.code.toUpperCase()) || '🌐';
                     return (
                       <button
                         key={c.code}
@@ -961,14 +960,17 @@ export default function TripSettings({
                           isSelected ? handleRemoveTargetCurrency(c.code) : handleAddTargetCurrency(c.code);
                         }}
                         disabled={isReadOnly}
-                        className={`flex flex-col items-start px-2.5 py-1.5 rounded-lg border text-left transition-all ${
+                        className={`flex items-center space-x-2 px-2.5 py-2 rounded-xl border text-left transition-all ${
                           isSelected
                             ? 'bg-indigo-50/60 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-900 text-indigo-700 dark:text-indigo-400 font-semibold'
                             : 'bg-white dark:bg-slate-900 border-slate-150 dark:border-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                        } disabled:opacity-50`}
+                        } disabled:opacity-50 cursor-pointer`}
                       >
-                        <span className="text-[10px] font-bold font-mono">{c.code} ({c.symbol})</span>
-                        <span className="text-[8px] text-slate-400 dark:text-slate-500 truncate w-full">{c.name}</span>
+                        <span className="text-base shrink-0">{flag}</span>
+                        <div className="min-w-0">
+                          <span className="text-[10px] font-bold font-mono block">{c.code}</span>
+                          <span className="text-[8px] text-slate-400 dark:text-slate-500 truncate block w-full">{c.name}</span>
+                        </div>
                       </button>
                     );
                   })}
@@ -996,23 +998,27 @@ export default function TripSettings({
                 )}
 
                 <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {parsedCurrencies.map(currency => (
-                    <div key={currency} className="flex items-center justify-between gap-4 bg-slate-50 dark:bg-slate-950/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800">
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono font-bold">1 {activeTrip.baseCurrency || 'USD'} =</span>
-                      <div className="flex items-center space-x-2">
-                        <input
-                          type="number"
-                          step="0.000001"
-                          required
-                          disabled={isReadOnly}
-                          value={activeTrip.exchangeRates?.[currency] !== undefined ? activeTrip.exchangeRates[currency] : getOfflineFallbackRate(activeTrip.baseCurrency || 'USD', currency)}
-                          onChange={e => handleExchangeRateChange(currency, e.target.value)}
-                          className="w-24 text-xs font-bold px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg outline-none text-slate-800 dark:text-slate-100 font-mono text-right disabled:opacity-50"
-                        />
-                        <span className="text-[10px] text-slate-700 dark:text-slate-300 font-bold w-10">{currency}</span>
+                  {parsedCurrencies.map(currency => {
+                    const flag = CURRENCY_FLAG_MAP.get(currency.toUpperCase()) || '🌐';
+                    return (
+                      <div key={currency} className="flex items-center justify-between gap-4 bg-slate-50 dark:bg-slate-950/50 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800">
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono font-bold">1 {activeTrip.baseCurrency || 'USD'} =</span>
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="number"
+                            step="0.000001"
+                            required
+                            disabled={isReadOnly}
+                            value={activeTrip.exchangeRates?.[currency] !== undefined ? activeTrip.exchangeRates[currency] : getOfflineFallbackRate(activeTrip.baseCurrency || 'USD', currency)}
+                            onChange={e => handleExchangeRateChange(currency, e.target.value)}
+                            className="w-24 text-xs font-bold px-2 py-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg outline-none text-slate-800 dark:text-slate-100 font-mono text-right disabled:opacity-50"
+                          />
+                          <span className="text-xs shrink-0">{flag}</span>
+                          <span className="text-[10px] text-slate-700 dark:text-slate-300 font-bold font-mono w-8">{currency}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1020,7 +1026,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 7. Expense Categories Card (Collapsible) */}
+      {/* 7. Expense Categories Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -1038,7 +1044,7 @@ export default function TripSettings({
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Expense Categories"
             >
               {isExpenseCategoriesCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -1069,7 +1075,7 @@ export default function TripSettings({
               <button
                 type="submit"
                 disabled={isReadOnly}
-                className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Add</span>
@@ -1099,7 +1105,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 8. Payment Categories Card (Collapsible) */}
+      {/* 8. Payment Categories Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -1117,7 +1123,7 @@ export default function TripSettings({
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Payment Categories"
             >
               {isPaymentCategoriesCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -1148,7 +1154,7 @@ export default function TripSettings({
               <button
                 type="submit"
                 disabled={isReadOnly}
-                className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-4 py-2.5 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>Add</span>
@@ -1178,7 +1184,7 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 10. Daily Hotel Start & End Schedule Card (Collapsible) */}
+      {/* 10. Daily Hotel Start & End Schedule Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
           className="flex items-center justify-between cursor-pointer select-none"
@@ -1200,7 +1206,7 @@ export default function TripSettings({
             )}
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle Daily Hotel Schedule"
             >
               {isHotelScheduleCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -1269,23 +1275,20 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 11. Export Expenses Sheet (CSV) Card (Collapsible) */}
+      {/* 11. Export Expenses Sheet (CSV) Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer select-none"
+          className="flex items-center justify-between cursor-pointer select-none"
           onClick={() => setIsCsvExportCollapsed(!isCsvExportCollapsed)}
         >
-          <div className="space-y-0.5 text-left">
-            <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block">Spreadsheet & Accounting</span>
-            <h3 className="font-sans text-xl font-black text-slate-800 dark:text-white flex items-center space-x-2">
-              <FileSpreadsheet className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
-              <span>Export Expenses Sheet (CSV)</span>
-            </h3>
-          </div>
-          <div className="flex items-center space-x-2 self-end sm:self-center">
+          <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2">
+            <FileSpreadsheet className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            <span>Export Expenses Sheet (CSV)</span>
+          </h3>
+          <div className="flex items-center space-x-2">
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle CSV Export Section"
             >
               {isCsvExportCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -1356,23 +1359,20 @@ export default function TripSettings({
         )}
       </div>
 
-      {/* 12. PDF Workbook Export Card (Collapsible) */}
+      {/* 12. PDF Workbook Export Card */}
       <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
         <div 
-          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 cursor-pointer select-none"
+          className="flex items-center justify-between cursor-pointer select-none"
           onClick={() => setIsPdfExportCollapsed(!isPdfExportCollapsed)}
         >
-          <div className="space-y-0.5 text-left">
-            <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider block">Document Package Center</span>
-            <h3 className="font-sans text-xl font-black text-slate-800 dark:text-white flex items-center space-x-2">
-              <FileText className="h-6 w-6 text-rose-600 dark:text-rose-400" />
-              <span>Export Trip Workbook (PDF)</span>
-            </h3>
-          </div>
-          <div className="flex items-center space-x-2 self-end sm:self-center">
+          <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2">
+            <FileText className="h-5 w-5 text-rose-600 dark:text-rose-400" />
+            <span>Export Trip Workbook (PDF)</span>
+          </h3>
+          <div className="flex items-center space-x-2">
             <button 
               type="button" 
-              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
               aria-label="Toggle PDF Export Section"
             >
               {isPdfExportCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
@@ -1382,7 +1382,6 @@ export default function TripSettings({
 
         {!isPdfExportCollapsed && (
           <>
-            {/* Vector PDF Export */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4 pt-1">
               <div className="space-y-0.5">
                 <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -1515,6 +1514,31 @@ export default function TripSettings({
         </div>,
         document.body
       )}
+
+      {/* 13. Custom Selection Bottom Sheets */}
+      <SelectionBottomSheet
+        isOpen={isStatusPickerOpen}
+        onClose={() => setIsStatusPickerOpen(false)}
+        title="Select Trip Status"
+        subtitle="Set the scheduling and execution phase of this trip"
+        options={statusOptions}
+        selectedValue={activeTrip.status || 'planned'}
+        onSelect={(val) => {
+          if (isStatusValidForDates(val as any, activeTrip.startDate, activeTrip.endDate)) {
+            updateActiveTrip({ status: val as any });
+          }
+        }}
+      />
+
+      <CurrencyPickerBottomSheet
+        isOpen={isQuoteCurrencyPickerOpen}
+        onClose={() => setIsQuoteCurrencyPickerOpen(false)}
+        currencies={bottomSheetCurrencies}
+        selectedCurrency={activeTrip.baseCurrency || 'USD'}
+        onSelectCurrency={(val) => handleBaseCurrencyChange(val)}
+        title="Select Base Quote Currency"
+        subtitle="Primary accounting currency used for calculations and conversions"
+      />
     </div>
   );
 }

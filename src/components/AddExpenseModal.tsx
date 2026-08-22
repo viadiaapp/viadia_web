@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Coins, AlertTriangle, Upload, DollarSign, Check, RefreshCw, Trash2, Eye } from 'lucide-react';
+import { X, Coins, AlertTriangle, Upload, DollarSign, Check, RefreshCw, Trash2, Eye, ChevronDown, User, Tag, CreditCard, ArrowRightLeft } from 'lucide-react';
 import { Trip, Expense, Split, AttachmentItem } from '../types';
 import { compressImageFile, validateAttachmentFile, getItemAttachments } from '../lib/imageUtils';
-import { DEFAULT_USD_RATES } from '../data/staticCurrencies';
+import { DEFAULT_USD_RATES, staticCurrenciesSeed } from '../data/staticCurrencies';
 import { getSetupExchangeRate } from '../lib/tripUtils';
 import { fetchLiveForexRates } from '../lib/apiUtils';
 import { AttachmentViewerModal } from './AttachmentViewerModal';
 import { AttachmentManager } from './AttachmentManager';
 import { useBackButton } from '../lib/backButtonHandler';
+import { SelectionBottomSheet, SelectOption } from './SelectionBottomSheet';
 
 interface AddExpenseModalProps {
   isOpen: boolean;
@@ -48,6 +49,13 @@ const getTimePart = (dtStr: string) => {
   return '12:00';
 };
 
+const CURRENCY_FLAG_MAP = new Map<string, string>();
+staticCurrenciesSeed.forEach((c) => {
+  if (c.currencyCode && c.flagEmoji && !CURRENCY_FLAG_MAP.has(c.currencyCode.toUpperCase())) {
+    CURRENCY_FLAG_MAP.set(c.currencyCode.toUpperCase(), c.flagEmoji);
+  }
+});
+
 export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   isOpen,
   onClose,
@@ -77,9 +85,14 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
 
+  // Active Bottom Sheet picker type
+  const [activePicker, setActivePicker] = useState<
+    'spendCurrency' | 'paidBy' | 'category' | 'paymentType' | 'fromCurrency' | 'toCurrency' | 'transferTo' | null
+  >(null);
+
   // Sub-modal attachment viewer (priority 110) & main modal (priority 100)
   useBackButton('add-expense-viewer', isViewerOpen, () => setIsViewerOpen(false), 110);
-  useBackButton('add-expense-modal', isOpen && !isViewerOpen, onClose, 100);
+  useBackButton('add-expense-modal', isOpen && !isViewerOpen && activePicker === null, onClose, 100);
 
   // Forex Specifics
   const [forexToAmount, setForexToAmount] = useState('');
@@ -109,7 +122,6 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    // Find the expense to edit if any
     const idToFind = propEditingExpenseId || editingExpense?.id || initialExpenseData?.id;
     const expenseToEdit =
       editingExpense ||
@@ -187,7 +199,6 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         setCustomSplitAmounts({});
       }
     } else {
-      // New expense defaults
       setCurrentEditingId(null);
       setTransactionType('expense');
       setExpenseTitle('');
@@ -230,6 +241,59 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     (activeTrip?.currencies || []).join(','),
     (activeTrip?.travelers || []).join(','),
   ]);
+
+  // Options Generators for BottomSheet
+  const currencyOptions: SelectOption[] = useMemo(() => {
+    const list = Array.from(new Set([activeTrip.baseCurrency || 'USD', ...(activeTrip.currencies || [])]));
+    return list.map((code) => {
+      const flag = CURRENCY_FLAG_MAP.get(code.toUpperCase()) || '🌐';
+      return {
+        value: code,
+        label: code,
+        sublabel: code === activeTrip.baseCurrency ? 'Base Currency' : 'Secondary Currency',
+        icon: <span>{flag}</span>,
+      };
+    });
+  }, [activeTrip.baseCurrency, activeTrip.currencies]);
+
+  const travelerOptions: SelectOption[] = useMemo(() => {
+    return (activeTrip.travelers || ['Me']).map((t) => ({
+      value: t,
+      label: t,
+      icon: <User className="h-4 w-4" />,
+    }));
+  }, [activeTrip.travelers]);
+
+  const categoryOptions: SelectOption[] = useMemo(() => {
+    const base = Array.from(
+      new Set([
+        ...(activeTrip.categories || ['Food', 'Transport', 'Lodging', 'Activities', 'Other']),
+        ...((activeTrip.expenses || []).map((e) => e.category).filter(Boolean) as string[]),
+      ])
+    ).filter((cat) => cat !== 'Forex Conversion' && !cat.startsWith('Forex in ') && cat !== 'Settlement' && cat !== 'Peer Transfer');
+
+    return base.map((cat) => ({
+      value: cat,
+      label: cat,
+      icon: <Tag className="h-4 w-4" />,
+    }));
+  }, [activeTrip.categories, activeTrip.expenses]);
+
+  const paymentMethodOptions: SelectOption[] = useMemo(() => {
+    const list = Array.from(
+      new Set([
+        ...availablePaymentMethods,
+        ...(activeTrip.expenses || [])
+          .filter((e) => (e.type === 'forex' || e.category === 'Forex Conversion') && e.forexToCurrency)
+          .map((e) => `Forex in ${e.forexToCurrency}`),
+      ])
+    );
+    return list.map((pm) => ({
+      value: pm,
+      label: pm,
+      icon: <CreditCard className="h-4 w-4" />,
+    }));
+  }, [availablePaymentMethods, activeTrip.expenses]);
 
   if (!isOpen) return null;
 
@@ -295,24 +359,6 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const val = validateAttachmentFile(file);
-    if (!val.valid) {
-      setValidationError(val.error || 'Invalid file.');
-      return;
-    }
-    setValidationError(null);
-    try {
-      const compressed = await compressImageFile(file);
-      setAttachmentName(compressed.name);
-      setAttachmentData(compressed.data);
-    } catch (err) {
-      console.error('Error compressing file:', err);
-    }
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isReadOnly) {
@@ -330,7 +376,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     let baseAmountNum = spendAmountNum;
 
     if (transactionType === 'forex') {
-      baseAmountNum = 0; // Asset transfer between wallets, not a expense budget hit
+      baseAmountNum = 0;
     } else if (expenseSpendCurrency === (activeTrip.baseCurrency || 'USD')) {
       baseAmountNum = spendAmountNum;
     } else {
@@ -498,7 +544,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             </div>
           </div>
 
-          {/* Form Fields */}
+          {/* Form Fields: Expense */}
           {transactionType === 'expense' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
               <div className="space-y-1 min-w-0">
@@ -552,27 +598,22 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 />
               </div>
 
-              {/* Currency Restricted strictly to trip currencies list */}
+              {/* Transaction Currency Picker */}
               <div className="space-y-1 min-w-0">
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                   Transaction Currency
                 </label>
-                <select
-                  value={expenseSpendCurrency}
-                  onChange={(e) => handleSpendCurrencyChange(e.target.value)}
-                  className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500 min-w-0 truncate"
+                <button
+                  type="button"
+                  onClick={() => setActivePicker('spendCurrency')}
+                  className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                 >
-                  <option value={activeTrip.baseCurrency || 'USD'}>
-                    {activeTrip.baseCurrency || 'USD'}
-                  </option>
-                  {(activeTrip.currencies || [])
-                    .filter((code) => code !== (activeTrip.baseCurrency || 'USD'))
-                    .map((code, cIdx) => (
-                      <option key={`modal-spendcurr-${code}-${cIdx}`} value={code}>
-                        {code}
-                      </option>
-                    ))}
-                </select>
+                  <span className="flex items-center space-x-2 truncate">
+                    <span>{CURRENCY_FLAG_MAP.get(expenseSpendCurrency.toUpperCase()) || '🌐'}</span>
+                    <span>{expenseSpendCurrency}</span>
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                </button>
               </div>
 
               <div className="space-y-1">
@@ -602,87 +643,56 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   disabled={expenseSpendCurrency === (activeTrip.baseCurrency || 'USD')}
                   className="w-full text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500 font-mono disabled:opacity-60"
                 />
-                {expenseSpendCurrency !== (activeTrip.baseCurrency || 'USD') && (
-                  <p className="text-[9px] text-slate-400 dark:text-slate-500 mt-0.5">
-                    Pre-populated from trip setup rate ({getSetupExchangeRate(activeTrip, expenseSpendCurrency)}). Click "Live Rate" to fetch market rates.
-                  </p>
-                )}
               </div>
 
+              {/* Paid By Picker */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                   Paid By
                 </label>
-                <select
-                  value={expensePaidBy}
-                  onChange={(e) => setExpensePaidBy(e.target.value)}
-                  className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                <button
+                  type="button"
+                  onClick={() => setActivePicker('paidBy')}
+                  className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                 >
-                  {(activeTrip.travelers || ['Me']).map((t, tIdx) => (
-                    <option key={`modal-paidby-${t}-${tIdx}`} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
+                  <span className="truncate">{expensePaidBy}</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                </button>
               </div>
 
+              {/* Category Picker */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                   Category Tag
                 </label>
-                <select
-                  value={expenseCategory}
-                  onChange={(e) => setExpenseCategory(e.target.value)}
-                  className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                <button
+                  type="button"
+                  onClick={() => setActivePicker('category')}
+                  className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                 >
-                  {Array.from(new Set([
-                    ...(activeTrip.categories || ['Food', 'Transport', 'Lodging', 'Activities', 'Other']),
-                    ...((activeTrip.expenses || []).map(e => e.category).filter(Boolean) as string[])
-                  ]))
-                  .filter((cat) => cat !== 'Forex Conversion' && !cat.startsWith('Forex in ') && cat !== 'Settlement' && cat !== 'Peer Transfer')
-                  .map((cat, catIdx) => (
-                    <option key={`modal-cat-${cat}-${catIdx}`} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
+                  <span className="truncate">{expenseCategory}</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                </button>
               </div>
 
+              {/* Payment Method Picker */}
               <div className="space-y-1">
                 <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                   Payment Method
                 </label>
-                <select
-                  value={expensePaymentType}
-                  onChange={(e) => setExpensePaymentType(e.target.value)}
-                  className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                <button
+                  type="button"
+                  onClick={() => setActivePicker('paymentType')}
+                  className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                 >
-                  {availablePaymentMethods.map((pm, pmIdx) => (
-                    <option key={`modal-pm-${pm}-${pmIdx}`} value={pm}>
-                      {pm}
-                    </option>
-                  ))}
-                  {Array.from(new Set(
-                    (activeTrip.expenses || [])
-                      .filter((e) => (e.type === 'forex' || e.category === 'Forex Conversion') && e.forexToCurrency)
-                      .map((e) => `Forex in ${e.forexToCurrency}`)
-                  )).map((forexPt) => (
-                    !availablePaymentMethods.includes(forexPt) && (
-                      <option key={`forex-${forexPt}`} value={forexPt}>
-                        {forexPt}
-                      </option>
-                    )
-                  ))}
-                  {expensePaymentType &&
-                    !availablePaymentMethods.includes(expensePaymentType) &&
-                    !((activeTrip.expenses || []).some(e => (e.type === 'forex' || e.category === 'Forex Conversion') && `Forex in ${e.forexToCurrency}` === expensePaymentType)) && (
-                      <option value={expensePaymentType}>{expensePaymentType}</option>
-                    )}
-                </select>
+                  <span className="truncate">{expensePaymentType}</span>
+                  <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                </button>
               </div>
             </div>
           )}
 
+          {/* Form Fields: Forex */}
           {transactionType === 'forex' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
@@ -721,56 +731,37 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   </div>
                 </div>
 
+                {/* Converted By Picker */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                     Converted By
                   </label>
-                  <select
-                    value={expensePaidBy}
-                    onChange={(e) => setExpensePaidBy(e.target.value)}
-                    className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                  <button
+                    type="button"
+                    onClick={() => setActivePicker('paidBy')}
+                    className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    {(activeTrip.travelers || ['Me']).map((t, tIdx) => (
-                      <option key={`forex-modal-paidby-${t}-${tIdx}`} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
+                    <span className="truncate">{expensePaidBy}</span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
+                {/* From Currency Picker */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                     From Currency
                   </label>
-                  <select
-                    value={expenseSpendCurrency}
-                    onChange={(e) => {
-                      const newFrom = e.target.value;
-                      setExpenseSpendCurrency(newFrom);
-                      const targetCurr = forexToCurrency || activeTrip.baseCurrency || 'USD';
-                      const newRate = getSetupExchangeRate(activeTrip, targetCurr, newFrom);
-                      setExpenseExchangeRate(String(newRate));
-                      const fromNum = parseFloat(expenseSpendAmount);
-                      if (!isNaN(fromNum) && fromNum > 0 && newRate > 0) {
-                        setForexToAmount((fromNum * newRate).toFixed(2));
-                      } else {
-                        const toNum = parseFloat(forexToAmount);
-                        if (!isNaN(toNum) && toNum > 0 && newRate > 0) {
-                          setExpenseSpendAmount((toNum / newRate).toFixed(2));
-                        }
-                      }
-                    }}
-                    className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                  <button
+                    type="button"
+                    onClick={() => setActivePicker('fromCurrency')}
+                    className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    <option value={activeTrip.baseCurrency || 'USD'}>{activeTrip.baseCurrency || 'USD'}</option>
-                    {(activeTrip.currencies || [])
-                      .filter((c) => c !== (activeTrip.baseCurrency || 'USD'))
-                      .map((c, cIdx) => (
-                        <option key={`forex-modal-fromcurr-${c}-${cIdx}`} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                  </select>
+                    <span className="flex items-center space-x-2 truncate">
+                      <span>{CURRENCY_FLAG_MAP.get(expenseSpendCurrency.toUpperCase()) || '🌐'}</span>
+                      <span>{expenseSpendCurrency}</span>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
                 <div className="space-y-1">
@@ -804,36 +795,22 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   />
                 </div>
 
+                {/* To Currency Picker */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                     To Currency
                   </label>
-                  <select
-                    value={forexToCurrency}
-                    onChange={(e) => {
-                      const newTo = e.target.value;
-                      setForexToCurrency(newTo);
-                      const fromCurr = expenseSpendCurrency || activeTrip.baseCurrency || 'USD';
-                      const newRate = getSetupExchangeRate(activeTrip, newTo, fromCurr);
-                      setExpenseExchangeRate(String(newRate));
-                      const fromNum = parseFloat(expenseSpendAmount);
-                      if (!isNaN(fromNum) && fromNum > 0 && newRate > 0) {
-                        setForexToAmount((fromNum * newRate).toFixed(2));
-                      } else {
-                        const toNum = parseFloat(forexToAmount);
-                        if (!isNaN(toNum) && toNum > 0 && newRate > 0) {
-                          setExpenseSpendAmount((toNum / newRate).toFixed(2));
-                        }
-                      }
-                    }}
-                    className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                  <button
+                    type="button"
+                    onClick={() => setActivePicker('toCurrency')}
+                    className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    {(activeTrip.currencies || [activeTrip.baseCurrency || 'USD']).map((c, cIdx) => (
-                      <option key={`forex-modal-tocurr-${c}-${cIdx}`} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                    <span className="flex items-center space-x-2 truncate">
+                      <span>{CURRENCY_FLAG_MAP.get(forexToCurrency.toUpperCase()) || '🌐'}</span>
+                      <span>{forexToCurrency}</span>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
                 <div className="space-y-1">
@@ -911,6 +888,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             </div>
           )}
 
+          {/* Form Fields: Peer Transfer */}
           {transactionType === 'peer_transfer' && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
@@ -949,47 +927,34 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   </div>
                 </div>
 
+                {/* Sender Picker */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                     Sender (From Person)
                   </label>
-                  <select
-                    value={expensePaidBy}
-                    onChange={(e) => {
-                      const sender = e.target.value;
-                      setExpensePaidBy(sender);
-                      if (transferTo === sender) {
-                        const other = (activeTrip.travelers || []).find((t) => t !== sender) || '';
-                        setTransferTo(other);
-                      }
-                    }}
-                    className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                  <button
+                    type="button"
+                    onClick={() => setActivePicker('paidBy')}
+                    className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    {(activeTrip.travelers || ['Me']).map((t, tIdx) => (
-                      <option key={`transfer-modal-paidby-${t}-${tIdx}`} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
+                    <span className="truncate">{expensePaidBy}</span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
+                {/* Recipient Picker */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                     Recipient (To Person)
                   </label>
-                  <select
-                    value={transferTo}
-                    onChange={(e) => setTransferTo(e.target.value)}
-                    className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                  <button
+                    type="button"
+                    onClick={() => setActivePicker('transferTo')}
+                    className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    {(activeTrip.travelers || ['Me'])
-                      .filter((t) => t !== expensePaidBy)
-                      .map((t, tIdx) => (
-                        <option key={`transfer-modal-recipient-${t}-${tIdx}`} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                  </select>
+                    <span className="truncate">{transferTo || 'Select recipient'}</span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
                 <div className="space-y-1">
@@ -1023,27 +988,24 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   />
                 </div>
 
+                {/* Transfer Currency Picker */}
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
                     Transfer Currency
                   </label>
-                  <select
-                    value={expenseSpendCurrency}
-                    onChange={(e) => handleSpendCurrencyChange(e.target.value)}
-                    className="w-full text-xs font-bold px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500"
+                  <button
+                    type="button"
+                    onClick={() => setActivePicker('spendCurrency')}
+                    className="w-full flex items-center justify-between text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 font-bold hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    <option value={activeTrip.baseCurrency || 'USD'}>{activeTrip.baseCurrency || 'USD'}</option>
-                    {(activeTrip.currencies || [])
-                      .filter((c) => c !== (activeTrip.baseCurrency || 'USD'))
-                      .map((c, cIdx) => (
-                        <option key={`transfer-modal-curr-${c}-${cIdx}`} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                  </select>
+                    <span className="flex items-center space-x-2 truncate">
+                      <span>{CURRENCY_FLAG_MAP.get(expenseSpendCurrency.toUpperCase()) || '🌐'}</span>
+                      <span>{expenseSpendCurrency}</span>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
-                {/* Exchange Rate for Peer Transfer when foreign currency selected */}
                 <div className="space-y-1 sm:col-span-2">
                   <div className="flex items-center justify-between">
                     <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
@@ -1071,17 +1033,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     disabled={expenseSpendCurrency === (activeTrip.baseCurrency || 'USD')}
                     className="w-full text-xs px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-850 dark:text-slate-100 focus:border-indigo-500 font-mono disabled:opacity-60"
                   />
-                  {expenseSpendCurrency !== (activeTrip.baseCurrency || 'USD') && (
-                    <p className="text-[9px] text-slate-400 dark:text-slate-500 mt-0.5">
-                      Pre-populated from trip setup rate ({getSetupExchangeRate(activeTrip, expenseSpendCurrency)}). Click "Live Rate" to fetch market rates.
-                    </p>
-                  )}
                 </div>
               </div>
             </div>
           )}
 
-          {/* Companion Split Section */}
+          {/* Split Section */}
           {transactionType === 'expense' && (activeTrip.travelers || []).length > 1 && (
             <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
               <div className="flex items-center justify-between">
@@ -1180,38 +1137,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                       </div>
                     ))}
                   </div>
-
-                  {(() => {
-                    const totalSpend = parseFloat(expenseSpendAmount) || 0;
-                    const customSum: number = (Object.values(customSplitAmounts) as string[]).reduce(
-                      (sum: number, val: string) => sum + (parseFloat(val) || 0),
-                      0
-                    );
-                    const diff = Number((totalSpend - customSum).toFixed(2));
-                    return (
-                      <div className="flex items-center justify-between text-[11px] font-bold px-1 text-slate-500">
-                        <span>
-                          Custom Total: <span className="font-mono text-slate-800 dark:text-slate-200">{customSum.toFixed(2)} {expenseSpendCurrency}</span>
-                        </span>
-                        {Math.abs(diff) > 0.01 ? (
-                          <span className={diff > 0 ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-rose-500 font-semibold'}>
-                            {diff > 0 ? `${diff.toFixed(2)} unallocated` : `${Math.abs(diff).toFixed(2)} over limit`}
-                          </span>
-                        ) : (
-                          <span className="text-emerald-600 dark:text-emerald-400 font-extrabold flex items-center space-x-0.5">
-                            <Check className="h-3 w-3 inline" />
-                            <span>Balanced</span>
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()}
                 </div>
               )}
             </div>
           )}
 
-          {/* Receipts / Invoices / Photos Attachments */}
+          {/* Attachments */}
           <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
             <AttachmentManager
               attachments={attachments}
@@ -1220,6 +1151,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             />
           </div>
 
+          {/* Actions */}
           <div className="pt-3 flex items-center justify-end space-x-3 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
@@ -1243,6 +1175,94 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
           fileName={attachmentName}
           fileData={attachmentData}
           title={attachmentName ? `Attachment - ${attachmentName}` : 'View Attachment'}
+        />
+
+        {/* Custom Selection Bottom Sheets */}
+        <SelectionBottomSheet
+          isOpen={activePicker === 'spendCurrency'}
+          onClose={() => setActivePicker(null)}
+          title="Select Currency"
+          options={currencyOptions}
+          selectedValue={expenseSpendCurrency}
+          onSelect={handleSpendCurrencyChange}
+        />
+
+        <SelectionBottomSheet
+          isOpen={activePicker === 'paidBy'}
+          onClose={() => setActivePicker(null)}
+          title="Select Traveler"
+          options={travelerOptions}
+          selectedValue={expensePaidBy}
+          onSelect={(val) => {
+            setExpensePaidBy(val);
+            if (transactionType === 'peer_transfer' && transferTo === val) {
+              const other = (activeTrip.travelers || []).find((t) => t !== val) || '';
+              setTransferTo(other);
+            }
+          }}
+        />
+
+        <SelectionBottomSheet
+          isOpen={activePicker === 'category'}
+          onClose={() => setActivePicker(null)}
+          title="Select Expense Category"
+          options={categoryOptions}
+          selectedValue={expenseCategory}
+          onSelect={(val) => setExpenseCategory(val)}
+        />
+
+        <SelectionBottomSheet
+          isOpen={activePicker === 'paymentType'}
+          onClose={() => setActivePicker(null)}
+          title="Select Payment Method"
+          options={paymentMethodOptions}
+          selectedValue={expensePaymentType}
+          onSelect={(val) => setExpensePaymentType(val)}
+        />
+
+        <SelectionBottomSheet
+          isOpen={activePicker === 'fromCurrency'}
+          onClose={() => setActivePicker(null)}
+          title="Select Source Currency"
+          options={currencyOptions}
+          selectedValue={expenseSpendCurrency}
+          onSelect={(newFrom) => {
+            setExpenseSpendCurrency(newFrom);
+            const targetCurr = forexToCurrency || activeTrip.baseCurrency || 'USD';
+            const newRate = getSetupExchangeRate(activeTrip, targetCurr, newFrom);
+            setExpenseExchangeRate(String(newRate));
+            const fromNum = parseFloat(expenseSpendAmount);
+            if (!isNaN(fromNum) && fromNum > 0 && newRate > 0) {
+              setForexToAmount((fromNum * newRate).toFixed(2));
+            }
+          }}
+        />
+
+        <SelectionBottomSheet
+          isOpen={activePicker === 'toCurrency'}
+          onClose={() => setActivePicker(null)}
+          title="Select Destination Currency"
+          options={currencyOptions}
+          selectedValue={forexToCurrency}
+          onSelect={(newTo) => {
+            setForexToCurrency(newTo);
+            const fromCurr = expenseSpendCurrency || activeTrip.baseCurrency || 'USD';
+            const newRate = getSetupExchangeRate(activeTrip, newTo, fromCurr);
+            setExpenseExchangeRate(String(newRate));
+            const fromNum = parseFloat(expenseSpendAmount);
+            if (!isNaN(fromNum) && fromNum > 0 && newRate > 0) {
+              setForexToAmount((fromNum * newRate).toFixed(2));
+            }
+          }}
+        />
+
+        <SelectionBottomSheet
+          isOpen={activePicker === 'transferTo'}
+          onClose={() => setActivePicker(null)}
+          title="Select Recipient"
+          options={travelerOptions.filter((opt) => opt.value !== expensePaidBy)}
+          selectedValue={transferTo}
+          onSelect={(val) => setTransferTo(val)}
         />
       </div>
     </div>,

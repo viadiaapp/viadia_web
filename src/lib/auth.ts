@@ -19,6 +19,7 @@ import {
   persistentMultipleTabManager
 } from 'firebase/firestore';
 import { Capacitor } from '@capacitor/core';
+import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -60,21 +61,6 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void
 ) => {
-  // Initialize GoogleAuth plugin for Capacitor Native (Android / GMS Core)
-  if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
-    import('@codetrix-studio/capacitor-google-auth')
-      .then(({ GoogleAuth }) => {
-        GoogleAuth.initialize({
-          clientId: (firebaseConfig as any).oAuthClientId || (firebaseConfig as any).clientId,
-          scopes: ['profile', 'email', 'https://www.googleapis.com/auth/drive.file'],
-          grantOfflineAccess: true,
-        });
-      })
-      .catch((e) => {
-        console.warn('Native GoogleAuth init skipped/failed:', e);
-      });
-  }
-
   // Check if current page URL is a Firebase sign-in magic link
   if (typeof window !== 'undefined' && isSignInWithEmailLink(auth, window.location.href)) {
     let email = window.localStorage.getItem('emailForSignIn');
@@ -83,7 +69,7 @@ export const initAuth = (
     }
     if (email) {
       signInWithEmailLink(auth, email.trim(), window.location.href)
-        .then((result) => {
+        .then(() => {
           window.localStorage.removeItem('emailForSignIn');
           window.localStorage.setItem('viadia_login_provider', 'email-magic-link');
           // Clean magic link parameters from URL query string
@@ -91,7 +77,7 @@ export const initAuth = (
           window.history.replaceState({}, document.title, cleanUrl);
         })
         .catch((err) => {
-          console.error('Magic link sign-in error:', err);
+          console.error('Sign-in error:', err);
         });
     }
   }
@@ -137,47 +123,34 @@ export const getAuthErrorMessage = (error: any): string => {
   return message || 'Authentication failed. Please try again or continue as Guest.';
 };
 
-// Must be called from a button click or user interaction
-// Supports Native Android GMS Core (Google Play Services) and Web Popup
+// Supports Native Android/iOS via @capacitor-firebase/authentication and Web Popup
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
     isSigningIn = true;
 
-    // 1. Android / iOS Native via Capacitor & Google Play Services (GMS Core)
+    // 1. Android / iOS Native via @capacitor-firebase/authentication
     if (Capacitor.isNativePlatform()) {
-      try {
-        const { GoogleAuth } = await import('@codetrix-studio/capacitor-google-auth');
-        const googleUser = await GoogleAuth.signIn();
-        const idToken = googleUser.authentication?.idToken;
-        const accessToken = googleUser.authentication?.accessToken || '';
+      const result = await FirebaseAuthentication.signInWithGoogle({
+        scopes: ['profile', 'email', 'https://www.googleapis.com/auth/drive.file']
+      });
 
-        if (!idToken) {
-          throw new Error('Google Play Services did not return an authentication ID token.');
-        }
+      const idToken = result.credential?.idToken;
+      const accessToken = result.credential?.accessToken || '';
 
-        const credential = GoogleAuthProvider.credential(idToken, accessToken || undefined);
-        const userCredential = await signInWithCredential(auth, credential);
-
-        cachedAccessToken = accessToken || idToken;
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('viadia_login_provider', 'google');
-        }
-        return { user: userCredential.user, accessToken: cachedAccessToken };
-      } catch (nativeErr: any) {
-        console.warn('Native GoogleAuth encountered error, testing web popup fallback:', nativeErr);
-        const msg = nativeErr?.message || String(nativeErr || '');
-        if (msg.includes('cancel') || msg.includes('12501') || msg === 'user cancelled') {
-          throw nativeErr;
-        }
-        // If native attempt failed due to runtime environment, try standard popup
-        const result = await signInWithPopup(auth, googleProvider);
-        const credential = GoogleAuthProvider.credentialFromResult(result);
-        cachedAccessToken = credential?.accessToken || null;
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('viadia_login_provider', 'google');
-        }
-        return { user: result.user, accessToken: cachedAccessToken || '' };
+      if (!idToken) {
+        throw new Error('Native Google sign-in completed but did not return an ID token.');
       }
+
+      // Link native Google credential with Firebase JS SDK
+      const credential = GoogleAuthProvider.credential(idToken, accessToken || undefined);
+      const userCredential = await signInWithCredential(auth, credential);
+      cachedAccessToken = accessToken || idToken;
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('viadia_login_provider', 'google');
+      }
+
+      return { user: userCredential.user, accessToken: cachedAccessToken };
     }
 
     // 2. Web Browser via Firebase Popup
@@ -189,10 +162,15 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
-    if (error?.code === 'auth/popup-closed-by-user' || error?.message?.includes('popup-closed-by-user') || error?.message?.includes('cancelled') || error?.message?.includes('canceled')) {
+    if (
+      error?.code === 'auth/popup-closed-by-user' ||
+      error?.message?.includes('popup-closed-by-user') ||
+      error?.message?.includes('cancelled') ||
+      error?.message?.includes('canceled')
+    ) {
       console.warn('Google sign-in closed or cancelled by user.');
     } else {
-      console.error('Google Sign in error:', error);
+      console.error('Google Sign-in error details:', error);
     }
     throw error;
   } finally {
@@ -203,6 +181,30 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 export const appleSignIn = async (): Promise<{ user: User } | null> => {
   try {
     isSigningIn = true;
+    
+    // 1. Android / iOS Native via @capacitor-firebase/authentication
+    if (Capacitor.isNativePlatform()) {
+      const result = await FirebaseAuthentication.signInWithApple({
+        scopes: ['email', 'name']
+      });
+      const idToken = result.credential?.idToken;
+      const rawNonce = (result.credential as any)?.rawNonce;
+
+      if (idToken) {
+        const provider = new OAuthProvider('apple.com');
+        const credential = provider.credential({
+          idToken,
+          rawNonce
+        });
+        const userCredential = await signInWithCredential(auth, credential);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('viadia_login_provider', 'apple');
+        }
+        return { user: userCredential.user };
+      }
+    }
+
+    // 2. Web Browser via Firebase Popup
     const result = await signInWithPopup(auth, appleProvider);
     if (typeof window !== 'undefined') {
       localStorage.setItem('viadia_login_provider', 'apple');
@@ -259,13 +261,13 @@ export const sendMagicLink = async (email: string): Promise<{ success: boolean; 
     }
     return {
       success: true,
-      message: `A sign-in magic link has been sent to ${cleanEmail}. Check your inbox or click the link to log in!`
+      message: `A sign-in link has been sent to ${cleanEmail}. Check your inbox or click the link to log in!`
     };
   } catch (error: any) {
     if (error?.code === 'auth/operation-not-allowed' || error?.message?.includes('operation-not-allowed')) {
       console.warn('Firebase Auth: Email link sign-in is not enabled in Firebase Console.');
       throw new Error(
-        'Email Magic Link is not enabled in your Firebase project yet. Please enable "Email link (passwordless sign-in)" under Firebase Authentication > Sign-in method in Firebase Console, or sign in using Google or Guest mode.'
+        'Login with Email Link is not enabled in your Firebase project yet. Please enable "Email link (passwordless sign-in)" under Firebase Authentication > Sign-in method in Firebase Console, or sign in using Google or Guest mode.'
       );
     }
     if (error?.code === 'auth/unauthorized-domain' || error?.message?.includes('unauthorized-domain')) {
@@ -280,11 +282,10 @@ export const sendMagicLink = async (email: string): Promise<{ success: boolean; 
 export const logout = async () => {
   try {
     if (Capacitor.isNativePlatform()) {
-      const { GoogleAuth } = await import('@codetrix-studio/capacitor-google-auth');
-      await GoogleAuth.signOut();
+      await FirebaseAuthentication.signOut();
     }
   } catch (e) {
-    // Ignore if not logged in via native GoogleAuth
+    // Ignore if not logged in natively
   }
   await signOut(auth);
   cachedAccessToken = null;
@@ -302,19 +303,15 @@ export function isOwnerOfTrip(
   if (!trip || !trip.ownerUid) return true;
   const owner = trip.ownerUid.trim().toLowerCase();
 
-  // Check against passed user object
   if (user) {
     if (user.uid && user.uid === trip.ownerUid) return true;
     if (user.email && user.email.trim().toLowerCase() === owner) return true;
   }
-  // Check against Firebase Auth currentUser
   if (auth.currentUser) {
     if (auth.currentUser.uid === trip.ownerUid) return true;
     if (auth.currentUser.email && auth.currentUser.email.trim().toLowerCase() === owner) return true;
   }
-  // Check against userCode
   if (userCode && (userCode === trip.ownerUid || userCode.trim().toLowerCase() === owner)) return true;
-  // Guest-created trips are owned locally
   if (trip.ownerUid.startsWith('guest_')) return true;
 
   return false;

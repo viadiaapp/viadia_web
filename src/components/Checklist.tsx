@@ -27,11 +27,13 @@ import {
   Upload,
   Camera,
   Loader2,
-  Search
+  Search,
+  Sparkle
 } from 'lucide-react';
 import { initTripGclistStyling, saveTripGclistStyling } from '../lib/db';
 import { useBackButton } from '../lib/backButtonHandler';
 import { capturePhotoDirectly } from '../lib/cameraUtils';
+import { SelectionBottomSheet, SelectOption } from './SelectionBottomSheet';
 
 interface ChecklistProps {
   trips: { [id: string]: Trip };
@@ -43,6 +45,16 @@ interface ChecklistProps {
   isReadOnly?: boolean;
   user?: any;
 }
+
+const OUTFIT_CATEGORY_OPTIONS: SelectOption[] = [
+  { value: 'Outfit', label: 'Outfit / Clothing', icon: '👕' },
+  { value: 'Footwear', label: 'Footwear / Shoes', icon: '👟' },
+  { value: 'Outerwear', label: 'Outerwear / Jacket', icon: '🧥' },
+  { value: 'Accessories', label: 'Accessories / Sunglasses', icon: '🕶️' },
+  { value: 'Evening Wear', label: 'Evening / Formal Wear', icon: '👔' },
+  { value: 'Swimwear', label: 'Swimwear / Activewear', icon: '🩳' },
+  { value: 'Other', label: 'Other', icon: '✨' },
+];
 
 export default function Checklist({
   trips,
@@ -64,30 +76,24 @@ export default function Checklist({
 
   const activeTrip = activeTripId ? trips[activeTripId] : null;
 
-  // Active sub-tab state: 'shared' | 'personal' | 'styling'
   const [activeTab, setActiveTab] = useState<'shared' | 'personal' | 'styling'>('shared');
 
-  // Trip-specific Checklist State (Tab 1 - Shared)
   const [newTripTask, setNewTripTask] = useState('');
   const [newTripCat, setNewTripCat] = useState<string>('');
   const [selectedTripCategory, setSelectedTripCategory] = useState<string>('All');
 
-  // Personal Checklist State (Tab 2 - Personal)
   const [tripGclist, setTripGclist] = useState<ChecklistItem[]>([]);
   const [newPersonalTask, setNewPersonalTask] = useState('');
   const [newPersonalCat, setNewPersonalCat] = useState<string>('');
   const [selectedPersonalCategory, setSelectedPersonalCategory] = useState<string>('All');
 
-  // Search states for each tab
   const [searchSharedQuery, setSearchSharedQuery] = useState('');
   const [searchPersonalQuery, setSearchPersonalQuery] = useState('');
   const [searchOutfitQuery, setSearchOutfitQuery] = useState('');
 
-  // Trip Styling State (Tab 3 - Styling)
   const [tripStyling, setTripStyling] = useState<TripStylingData>({ days: {} });
   const [isLoadingGclistStyling, setIsLoadingGclistStyling] = useState(false);
 
-  // Collapsed Days state for Outfits
   const [collapsedDays, setCollapsedDays] = useState<{ [dayKey: string]: boolean }>({});
   const toggleCollapseDay = (dayKey: string) => {
     setCollapsedDays(prev => ({
@@ -96,7 +102,6 @@ export default function Checklist({
     }));
   };
 
-  // Outfit Item Modal state (Add / Modify)
   const [stylingModalOpen, setStylingModalOpen] = useState(false);
   const [targetDayKey, setTargetDayKey] = useState<string>('1');
   const [editingItem, setEditingItem] = useState<StylingItem | null>(null);
@@ -106,6 +111,9 @@ export default function Checklist({
   const [outfitImageUrl, setOutfitImageUrl] = useState('');
   const [isCapturingOutfit, setIsCapturingOutfit] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+
+  // BottomSheet selector state for Outfit Category
+  const [isOutfitCatPickerOpen, setIsOutfitCatPickerOpen] = useState(false);
 
   const handleOutfitImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -136,18 +144,15 @@ export default function Checklist({
     return [...list].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   }, [activeTrip?.checklistCategories]);
 
-  // Category management inputs & deletion modal state
   const [newSharedCatInput, setNewSharedCatInput] = useState('');
   const [newPersonalCatInput, setNewPersonalCatInput] = useState('');
   const [personalCustomCategories, setPersonalCustomCategories] = useState<string[]>([]);
   const [deleteCategoryModal, setDeleteCategoryModal] = useState<{ catName: string; type: 'shared' | 'personal'; itemCount: number } | null>(null);
 
-  // Modals & sub-overlays back button handlers
   useBackButton('checklist-preview-image', previewImageUrl !== null, () => setPreviewImageUrl(null), 110);
-  useBackButton('checklist-styling-modal', stylingModalOpen, () => setStylingModalOpen(false), 110);
+  useBackButton('checklist-styling-modal', stylingModalOpen && !isOutfitCatPickerOpen, () => setStylingModalOpen(false), 110);
   useBackButton('checklist-delete-category', deleteCategoryModal !== null, () => setDeleteCategoryModal(null), 110);
 
-  // Fetch or initialize trip_gclist_styling whenever activeTrip changes
   useEffect(() => {
     let isMounted = true;
     async function loadData() {
@@ -175,7 +180,6 @@ export default function Checklist({
     };
   }, [activeTrip?.id, activeTrip?.code, (globalChecklist || []).map(g => `${g.id}-${g.checked}`).join(',')]);
 
-  // Helper to persist trip_gclist_styling
   const persistGclistStyling = async (updatedGclist?: ChecklistItem[], updatedStyling?: TripStylingData) => {
     if (!activeTrip) return;
     const tripCode = activeTrip.code || activeTrip.id;
@@ -194,7 +198,6 @@ export default function Checklist({
     }
   };
 
-  // --- TAB 1: SHARED LIST LOGIC ---
   const tripCategories = useMemo(() => {
     const cats = new Set<string>();
     activeChecklistCategories.forEach(c => cats.add(c));
@@ -318,7 +321,6 @@ export default function Checklist({
     }
   };
 
-  // --- TAB 2: PERSONAL LIST LOGIC ---
   const personalCategoryOptions = useMemo(() => {
     const cats = new Set<string>();
     (tripGclist || []).forEach(item => {
@@ -398,8 +400,6 @@ export default function Checklist({
     persistGclistStyling(updated, undefined);
   };
 
-  // --- TAB 3: TRIP STYLING LOGIC ---
-  // Compute Days for the active trip
   const dayCards = useMemo(() => {
     if (!activeTrip) return [];
 
@@ -439,7 +439,6 @@ export default function Checklist({
     }
 
     return dates.map(d => {
-      // Find activities planned for this day (excluding Start/End at Hotel and stay items)
       const places = (activeTrip.timeline || []).filter(place => {
         if (
           place.isAutoDailyHotelStop ||
@@ -455,7 +454,6 @@ export default function Checklist({
         return place.time.startsWith(d.dateString);
       });
 
-      // Get outfit items for this day
       const dayKeyNum = String(d.dayNumber);
       const dayKeyDate = d.dateString;
       const daysObj = tripStyling?.days || {};
@@ -487,7 +485,6 @@ export default function Checklist({
     setCollapsedDays(newCollapsed);
   };
 
-  // Open Add Outfit Modal
   const handleOpenAddOutfitModal = (dayKey: string) => {
     setTargetDayKey(dayKey);
     setEditingItem(null);
@@ -498,7 +495,6 @@ export default function Checklist({
     setStylingModalOpen(true);
   };
 
-  // Open Edit Outfit Modal
   const handleOpenEditOutfitModal = (dayKey: string, item: StylingItem) => {
     setTargetDayKey(dayKey);
     setEditingItem(item);
@@ -509,7 +505,6 @@ export default function Checklist({
     setStylingModalOpen(true);
   };
 
-  // Save Outfit Item (Add or Modify)
   const handleSaveOutfitItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!outfitTitle.trim() || !activeTrip) return;
@@ -519,7 +514,6 @@ export default function Checklist({
     const dayList = [...(currentDays[dayKey] || [])];
 
     if (editingItem) {
-      // Modify
       const updatedList = dayList.map(item =>
         item.id === editingItem.id
           ? {
@@ -533,7 +527,6 @@ export default function Checklist({
       );
       currentDays[dayKey] = updatedList;
     } else {
-      // Add
       const newItem: StylingItem = {
         id: `style-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         title: outfitTitle.trim(),
@@ -555,7 +548,6 @@ export default function Checklist({
     setOutfitImageUrl('');
   };
 
-  // Toggle Outfit Checkbox
   const handleToggleOutfitItem = (dayKey: string, itemId: string) => {
     const currentDays = { ...(tripStyling.days || {}) };
     const dayList = currentDays[dayKey] || [];
@@ -568,7 +560,6 @@ export default function Checklist({
     persistGclistStyling(undefined, updatedStyling);
   };
 
-  // Delete Outfit Item
   const handleDeleteOutfitItem = (dayKey: string, itemId: string) => {
     const currentDays = { ...(tripStyling.days || {}) };
     const dayList = currentDays[dayKey] || [];
@@ -578,7 +569,6 @@ export default function Checklist({
     persistGclistStyling(undefined, updatedStyling);
   };
 
-  // Progress calculations
   const getProgress = (items: ChecklistItem[]) => {
     if (!items || items.length === 0) return { completed: 0, total: 0, pct: 0 };
     const completed = items.filter(x => x.checked).length;
@@ -649,7 +639,6 @@ export default function Checklist({
     <div className="w-full space-y-6 text-left pb-28">
       {/* 3-Tab Selector Bar */}
       <div className="bg-white dark:bg-slate-900/90 p-1.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex flex-nowrap overflow-x-auto scrollbar-none gap-1.5 shadow-xs w-full">
-        {/* Tab 1: Shared */}
         <button
           type="button"
           onClick={() => setActiveTab('shared')}
@@ -670,7 +659,6 @@ export default function Checklist({
           )}
         </button>
 
-        {/* Tab 2: Personal */}
         <button
           type="button"
           onClick={() => setActiveTab('personal')}
@@ -689,7 +677,6 @@ export default function Checklist({
           </span>
         </button>
 
-        {/* Tab 3: Outfits */}
         <button
           type="button"
           onClick={() => setActiveTab('styling')}
@@ -709,7 +696,7 @@ export default function Checklist({
         </button>
       </div>
 
-      {/* Sub Heading banner right below slider selection for all 3 tabs */}
+      {/* Sub Heading banner */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-1">
         <div>
           <h2 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2">
@@ -778,7 +765,6 @@ export default function Checklist({
             </div>
           ) : (
             <>
-              {/* Separate Card 1: Add Task Form */}
               {!isReadOnly && (
                 <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-3">
                   <div className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
@@ -824,7 +810,6 @@ export default function Checklist({
                 </div>
               )}
 
-              {/* Card 2: Manage Shared Categories */}
               <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-3">
                 <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-100">
                   <div className="flex items-center space-x-1.5">
@@ -870,25 +855,24 @@ export default function Checklist({
                     className="flex gap-2 pt-1 items-center w-full"
                   >
                     <input
-					  type="text"
-					  placeholder="Add category (e.g. Electronics)"
-					  value={newSharedCatInput}
-					  onChange={(e) => setNewSharedCatInput(e.target.value)}
-					  className="flex-1 min-w-0 text-xs px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-800 dark:text-slate-100 focus:border-indigo-500 transition shadow-2xs"
-					/>
+                      type="text"
+                      placeholder="Add category (e.g. Electronics)"
+                      value={newSharedCatInput}
+                      onChange={(e) => setNewSharedCatInput(e.target.value)}
+                      className="flex-1 min-w-0 text-xs px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-800 dark:text-slate-100 focus:border-indigo-500 transition shadow-2xs"
+                    />
 
-					<button
-					  type="submit"
-					  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-indigo-100 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-950/40 px-3.5 py-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 transition hover:bg-indigo-600 hover:text-white cursor-pointer"
-					>
-					  <Plus className="h-3.5 w-3.5" />
-					  <span>Add Category</span>
-					</button>
+                    <button
+                      type="submit"
+                      className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-xl border border-indigo-100 dark:border-indigo-900/50 bg-indigo-50 dark:bg-indigo-950/40 px-3.5 py-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 transition hover:bg-indigo-600 hover:text-white cursor-pointer"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>Add Category</span>
+                    </button>
                   </form>
                 )}
               </div>
 
-              {/* Category Filter Bar + Search Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center space-x-2 overflow-x-auto whitespace-nowrap pb-1 scrollbar-thin text-xs flex-1">
                   {tripCategories.map((cat, idx) => {
@@ -938,7 +922,6 @@ export default function Checklist({
                 </div>
               </div>
 
-              {/* In the end: List all cards for shared items */}
               {(!activeTrip.checklist || activeTrip.checklist.length === 0) ? (
                 <div className="p-8 sm:p-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl bg-white dark:bg-slate-900 shadow-xs">
                   <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
@@ -1002,7 +985,6 @@ export default function Checklist({
       {/* --- TAB CONTENT 2: PERSONAL LIST --- */}
       {activeTab === 'personal' && (
         <div className="space-y-6 text-left w-full">
-          {/* Separate Card 1: Add Personal Task Form */}
           <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-3">
             <div className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center space-x-1.5">
               <Plus className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
@@ -1048,7 +1030,6 @@ export default function Checklist({
             </form>
           </div>
 
-          {/* Card 2: Manage Personal Categories */}
           <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-3">
             <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-100">
               <div className="flex items-center space-x-1.5">
@@ -1091,24 +1072,23 @@ export default function Checklist({
               className="flex gap-2 pt-1 items-center w-full"
             >
               <input
-				  type="text"
-				  placeholder="Add personal category (e.g. Medicine)"
-				  value={newPersonalCatInput}
-				  onChange={(e) => setNewPersonalCatInput(e.target.value)}
-				  className="flex-1 min-w-0 text-xs px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-800 dark:text-slate-100 focus:border-indigo-500 transition shadow-2xs"
-				/>
+                type="text"
+                placeholder="Add personal category (e.g. Medicine)"
+                value={newPersonalCatInput}
+                onChange={(e) => setNewPersonalCatInput(e.target.value)}
+                className="flex-1 min-w-0 text-xs px-3.5 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl outline-none text-slate-800 dark:text-slate-100 focus:border-indigo-500 transition shadow-2xs"
+              />
 
-				<button
-				  type="submit"
-				  className="shrink-0 flex items-center gap-1 whitespace-nowrap px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50 hover:bg-indigo-600 hover:text-white text-xs font-bold transition cursor-pointer"
-				>
-				  <Plus className="h-3.5 w-3.5" />
-				  <span>Add Category</span>
-				</button>
+              <button
+                type="submit"
+                className="shrink-0 flex items-center gap-1 whitespace-nowrap px-3.5 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-900/50 hover:bg-indigo-600 hover:text-white text-xs font-bold transition cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add Category</span>
+              </button>
             </form>
           </div>
 
-          {/* Personal Category Filter Bar + Search Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center space-x-2 overflow-x-auto whitespace-nowrap pb-1 scrollbar-thin text-xs flex-1">
               {personalCategories.map((cat, idx) => {
@@ -1158,7 +1138,6 @@ export default function Checklist({
             </div>
           </div>
 
-          {/* In the end: List all cards for personal items */}
           {tripGclist.length === 0 ? (
             <div className="p-8 sm:p-12 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-3xl bg-white dark:bg-slate-900 shadow-xs">
               <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
@@ -1232,7 +1211,6 @@ export default function Checklist({
             </div>
           ) : (
             <>
-              {/* Outfits Search & Actions Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 sm:p-4 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
                 <div className="relative flex-1">
                   <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -1306,7 +1284,6 @@ export default function Checklist({
                       key={`outfit-day-${day.dayNumber}-${dayIdx}`}
                       className="p-4 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs text-left w-full transition-colors"
                     >
-                      {/* Day Group Header - Matched exactly with Timeline tab */}
                       <div
                         onClick={() => toggleCollapseDay(dayKey)}
                         className="flex items-center justify-between text-left border-l-4 border-indigo-600 pl-3.5 py-2 bg-white dark:bg-slate-900 rounded-r-2xl pr-3 cursor-pointer hover:bg-slate-100/80 dark:hover:bg-slate-950 transition-colors"
@@ -1342,7 +1319,6 @@ export default function Checklist({
                         </div>
                       </div>
 
-                      {/* Card Body - Collapsible */}
                       <AnimatePresence initial={false}>
                         {!isCollapsed && (
                           <motion.div
@@ -1357,7 +1333,6 @@ export default function Checklist({
                             className="overflow-hidden"
                           >
                             <div className="pt-4 space-y-4">
-                              {/* Planned Activities Description */}
                               <div className="bg-slate-50/80 dark:bg-slate-950/60 p-3 rounded-2xl border border-slate-200/60 dark:border-slate-800 text-xs space-y-1.5">
                                 <div className="flex items-center space-x-1.5 text-slate-500 dark:text-slate-400 font-bold text-[11px] uppercase tracking-wider">
                                   <Calendar className="h-3.5 w-3.5 text-indigo-500" />
@@ -1389,7 +1364,6 @@ export default function Checklist({
                                 )}
                               </div>
 
-                              {/* Outfits List for this day */}
                               <div className="space-y-2">
                                 <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider flex items-center space-x-1">
                                   <Shirt className="h-3.5 w-3.5 text-indigo-500" />
@@ -1421,7 +1395,6 @@ export default function Checklist({
                                             )}
                                           </div>
 
-                                          {/* Image Thumbnail Preview if present */}
                                           {item.imageUrl && (
                                             <img
                                               src={item.imageUrl}
@@ -1456,7 +1429,6 @@ export default function Checklist({
                                           </div>
                                         </div>
 
-                                        {/* Options: Edit & Delete */}
                                         <div className="flex items-center space-x-1 shrink-0 self-end sm:self-center">
                                           <button
                                             type="button"
@@ -1493,11 +1465,10 @@ export default function Checklist({
         </div>
       )}
 
-      {/* Outfit Item Modal (Add / Modify with Image Upload) */}
+      {/* Outfit Item Modal */}
       {stylingModalOpen && createPortal(
-        <div className="fixed inset-0 z-[99999] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[28px] sm:rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl text-left max-h-[90vh] flex flex-col overflow-hidden min-w-0">
-            {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 shrink-0">
               <h3 className="font-sans text-sm sm:text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2">
                 <Shirt className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
@@ -1512,7 +1483,6 @@ export default function Checklist({
               </button>
             </div>
 
-            {/* Modal Form Body */}
             <form onSubmit={handleSaveOutfitItem} className="flex flex-col flex-1 overflow-hidden min-h-0 pt-4">
               <div className="flex-1 overflow-y-auto scrollbar-thin space-y-4 pr-1">
                 <div>
@@ -1529,23 +1499,22 @@ export default function Checklist({
                   />
                 </div>
 
+                {/* Outfit Category Selection via Bottom Sheet */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Category
                   </label>
-                  <select
-                    value={outfitCategory}
-                    onChange={e => setOutfitCategory(e.target.value)}
-                    className="w-full text-xs px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-slate-100 font-bold outline-none hover:bg-slate-100 transition shadow-xs"
+                  <button
+                    type="button"
+                    onClick={() => setIsOutfitCatPickerOpen(true)}
+                    className="w-full flex items-center justify-between text-xs px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-800 dark:text-slate-100 font-bold outline-none hover:bg-slate-100 dark:hover:bg-slate-900 transition shadow-xs cursor-pointer"
                   >
-                    <option value="Outfit">Outfit / Clothing</option>
-                    <option value="Footwear">Footwear / Shoes</option>
-                    <option value="Outerwear">Outerwear / Jacket</option>
-                    <option value="Accessories">Accessories / Sunglasses</option>
-                    <option value="Evening Wear">Evening / Formal Wear</option>
-                    <option value="Swimwear">Swimwear / Activewear</option>
-                    <option value="Other">Other</option>
-                  </select>
+                    <span className="flex items-center space-x-2 truncate">
+                      <span>{OUTFIT_CATEGORY_OPTIONS.find(c => c.value === outfitCategory)?.icon}</span>
+                      <span>{OUTFIT_CATEGORY_OPTIONS.find(c => c.value === outfitCategory)?.label || outfitCategory}</span>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
                 <div>
@@ -1561,7 +1530,6 @@ export default function Checklist({
                   />
                 </div>
 
-                {/* Upload Outfit Image */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
                     Outfit Photo / Inspiration (Optional)
@@ -1612,7 +1580,6 @@ export default function Checklist({
                 </div>
               </div>
 
-              {/* Action Buttons */}
               <div className="flex items-center justify-end space-x-2 pt-3 mt-3 border-t border-slate-100 dark:border-slate-800 shrink-0">
                 <button
                   type="button"
@@ -1634,7 +1601,17 @@ export default function Checklist({
         document.body
       )}
 
-      {/* FULL IMAGE PREVIEW MODAL */}
+      {/* Outfit Category Selection Bottom Sheet */}
+      <SelectionBottomSheet
+        isOpen={isOutfitCatPickerOpen}
+        onClose={() => setIsOutfitCatPickerOpen(false)}
+        title="Select Outfit Category"
+        options={OUTFIT_CATEGORY_OPTIONS}
+        selectedValue={outfitCategory}
+        onSelect={(val) => setOutfitCategory(val)}
+      />
+
+      {/* Full Image Preview Modal */}
       {previewImageUrl && createPortal(
         <div
           className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in"
@@ -1658,7 +1635,7 @@ export default function Checklist({
         document.body
       )}
 
-      {/* Deletion Warning Modal for Shared and Personal Checklist Categories */}
+      {/* Deletion Warning Modal */}
       {deleteCategoryModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[28px] sm:rounded-3xl p-5 sm:p-6 max-w-sm w-full space-y-4 shadow-xl text-left max-h-[90vh] overflow-y-auto min-w-0">

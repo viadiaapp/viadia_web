@@ -11,12 +11,11 @@ export interface Place {
   id: string;
   title: string;
   description: string;
-  time: string; // Date or text representing when
+  time: string;
   lat: number;
   lng: number;
   address: string;
   attachments?: AttachmentItem[];
-  // Extended properties for Transportation or attachments
   isTransportation?: boolean;
   isTransport?: boolean;
   transportType?: 'Flight' | 'Train' | 'Bus' | 'Ferry' | 'Car' | 'Other';
@@ -43,7 +42,6 @@ export interface Place {
   seatNum?: string;
   confirmationNum?: string;
 
-  // Extended properties for Stay / Accommodation
   isStay?: boolean;
   hotelName?: string;
   checkInTime?: string;
@@ -55,7 +53,6 @@ export interface Place {
   stayAttachmentData?: string;
   stayDesc?: string;
 
-  // Auto Daily Hotel Start & End Stop properties
   isDailyHotelStop?: boolean;
   isAutoDailyHotelStop?: boolean;
   hotelStopType?: 'start' | 'end';
@@ -71,17 +68,17 @@ export interface Split {
 export interface Expense {
   id: string;
   title: string;
-  amount: number; // Stored in trip's Base Currency
-  category: string; // Dynamic custom categories
-  paidBy: string; // traveler name
+  amount: number;
+  category: string;
+  paidBy: string;
   splitType: 'equal' | 'custom';
   splits: Split[];
-  placeId: string | null; // Tagged to a place in the timeline
+  placeId: string | null;
   date: string;
-  paymentType?: string; // Customizable payment types (e.g. credit card name, Cash)
-  spendAmount?: number; // Original amount in local currency
-  spendCurrency?: string; // Original currency (e.g. SGD, INR)
-  exchangeRate?: number; // Forex exchange rate for this transaction
+  paymentType?: string;
+  spendAmount?: number;
+  spendCurrency?: string;
+  exchangeRate?: number;
   type?: 'expense' | 'forex' | 'peer_transfer';
   forexToCurrency?: string;
   forexToAmount?: number;
@@ -108,28 +105,26 @@ export interface Trip {
   status: 'planned' | 'completed' | 'active' | 'cancelled';
   startDate: string;
   endDate: string;
-  countries: string[]; // List of country names or ISO codes
+  countries: string[];
   miles: number;
-  travelers: string[]; // Master list of people
+  travelers: string[];
   timeline: Place[];
   expenses: Expense[];
   checklist: ChecklistItem[];
-  // New customizable properties
   budgetLimit?: number;
-  paymentTypes?: string[]; // e.g. ['Cash', 'Chase Sapphire', 'Amex']
-  categories?: string[]; // e.g. ['Food', 'Airline Tickets', 'Accommodation', 'Visa Fee', 'Shopping', 'Other']
-  checklistCategories?: string[]; // e.g. ['Packing', 'Documents', 'Bookings', 'Other']
-  baseCurrency?: string; // e.g. 'USD'
-  currencies?: string[]; // e.g. ['USD', 'SGD', 'INR']
-  exchangeRates?: { [currency: string]: number }; // Rate relative to base (e.g. { 'SGD': 1.34, 'INR': 83.0 })
+  paymentTypes?: string[];
+  categories?: string[];
+  checklistCategories?: string[];
+  baseCurrency?: string;
+  currencies?: string[];
+  exchangeRates?: { [currency: string]: number };
   ownerUid?: string;
   allowOthersToModify?: boolean;
   isJoined?: boolean;
 
-  // Daily Hotel Start & End Settings
   enableHotelDailyStops?: boolean;
-  hotelDailyStartTime?: string; // e.g. "09:00"
-  hotelDailyEndTime?: string; // e.g. "21:00"
+  hotelDailyStartTime?: string;
+  hotelDailyEndTime?: string;
   removedDailyHotelStopIds?: string[];
   updatedAt?: string;
 }
@@ -144,13 +139,13 @@ export type ColorTheme = 'indigo' | 'emerald' | 'amber' | 'rose' | 'ocean' | 'te
 export type SubscriptionTierType = '1_year' | '2_year' | '3_year' | '5_year' | 'lifetime' | 'free';
 
 export interface SubscriptionPlan {
-  id: string; // '1_year' | '2_year' | '3_year' | '5_year' | 'lifetime'
+  id: string;
   name: string;
   type: SubscriptionTierType;
   durationYears: number;
   originalPrice: number;
   discountedPrice: number;
-  currency: string; // "USD"
+  currency: string;
   description?: string;
   badge?: string;
   popular?: boolean;
@@ -184,10 +179,10 @@ export interface UserDetails {
   name: string;
   userCode: string | null;
   authProvider?: 'google' | 'apple' | 'email-otp' | 'guest' | 'email-magic-link';
-  adTier?: boolean; // true = ad-free subscription active, false = free tier
+  adTier?: boolean;
   userTier?: SubscriptionTierType | 'lifetime' | 'free';
-  sub_start_date?: string; // ISO date string e.g. "2026-08-17T..."
-  sub_end_date?: string; // ISO date string e.g. "2027-08-17T..." or "2099-12-31"
+  sub_start_date?: string;
+  sub_end_date?: string;
   subscription_tier?: SubscriptionTierType;
   createdAt?: any;
 }
@@ -201,6 +196,9 @@ export interface SeriesCodeCounter {
 export interface UserConfig {
   userCode: string;
   globalChecklist: ChecklistItem[];
+  defaultCurrency?: string;
+  temperatureUnit?: 'C' | 'F';
+  distanceUnit?: 'km' | 'miles';
   updatedAt?: any;
 }
 
@@ -241,5 +239,3 @@ export interface TripGclistStyling {
   styling?: TripStylingData;
   updatedAt?: string;
 }
-
-

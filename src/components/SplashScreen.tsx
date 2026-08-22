@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, Loader2, ArrowRight, ArrowLeft, Moon, Sun, AlertCircle, Globe, Mail } from 'lucide-react';
+import { User, Loader2, ArrowRight, ArrowLeft, Moon, Sun, AlertCircle, Globe, Mail, Coins, ChevronRight } from 'lucide-react';
 import { ViadiaLogo, ViadiaWordmark, ViadiaPunchline } from './BrandComponents';
 import { splashBgImage, onboardingPlanImage, onboardingTrackImage, onboardingShareImage } from '../assets/splash';
+import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
+import { getDefaultCurrency, setUserPreferences } from '../lib/userPreferences';
+import { staticCurrenciesSeed } from '../data/staticCurrencies';
 
 interface SplashScreenProps {
   onLoginWithGoogle: () => void;
   onLoginWithApple?: () => void;
-  onContinueAsGuest: (name: string) => void;
-  onRegisterGoogleName: (name: string) => void;
+  onContinueAsGuest: (name: string, defaultCurrency?: string) => void;
+  onRegisterGoogleName: (name: string, defaultCurrency?: string) => void;
   onSendMagicLink?: (email: string) => Promise<{ success: boolean; message: string }>;
   isLoggingIn: boolean;
   isLoggedInUser?: boolean;
@@ -20,6 +23,16 @@ interface SplashScreenProps {
 
 type OnboardingPage = 1 | 2 | 3 | 4 | 5;
 type AuthSubStep = 'methods' | 'magic-link' | 'guest-name' | 'google-name';
+
+const getCurrencyFlagAndInfo = (code: string) => {
+  const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === code.toUpperCase());
+  return {
+    code: code.toUpperCase(),
+    name: match?.currencyName || code,
+    symbol: match?.currencySymbol || '$',
+    flag: match?.flagEmoji || '🌐',
+  };
+};
 
 export default function SplashScreen({
   onLoginWithGoogle,
@@ -37,6 +50,8 @@ export default function SplashScreen({
   const [currentPage, setCurrentPage] = useState<OnboardingPage>(1);
   const [authSubStep, setAuthSubStep] = useState<AuthSubStep>('methods');
   const [guestName, setGuestName] = useState('');
+  const [selectedCurrency, setSelectedCurrency] = useState<string>(() => getDefaultCurrency());
+  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [linkSent, setLinkSent] = useState(false);
   const [isSendingLink, setIsSendingLink] = useState(false);
@@ -59,18 +74,14 @@ export default function SplashScreen({
     const deltaX = touchEndX - touchStartX;
     const deltaY = touchEndY - touchStartY;
 
-    // Trigger swipe if horizontal motion is dominant and exceeds 40px
     if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 40) {
       if (deltaX < 0) {
-        // Swipe Left -> Next Page
         if (currentPage < 5) {
           setCurrentPage((prev) => (prev + 1) as OnboardingPage);
         }
       } else {
-        // Swipe Right -> Previous Page
         if (currentPage > 1) {
           if (currentPage === 5 && authSubStep !== 'methods') {
-            // Stay on page 5 if currently entering guest/google display name
             return;
           }
           setCurrentPage((prev) => (prev - 1) as OnboardingPage);
@@ -103,7 +114,7 @@ export default function SplashScreen({
         setLinkSentNotice(res.message);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to send magic sign-in link.');
+      setError(err?.message || 'Failed to send sign-in link.');
     } finally {
       setIsSendingLink(false);
     }
@@ -117,10 +128,13 @@ export default function SplashScreen({
     }
     setError(null);
 
+    const currencyToSave = (selectedCurrency || 'USD').toUpperCase().trim();
+    setUserPreferences({ defaultCurrency: currencyToSave });
+
     if (authSubStep === 'guest-name') {
-      onContinueAsGuest(guestName.trim());
+      onContinueAsGuest(guestName.trim(), currencyToSave);
     } else if (authSubStep === 'google-name') {
-      onRegisterGoogleName(guestName.trim());
+      onRegisterGoogleName(guestName.trim(), currencyToSave);
     }
   };
 
@@ -130,8 +144,7 @@ export default function SplashScreen({
       onTouchEnd={handleTouchEnd}
       className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-300 relative overflow-hidden font-sans select-none flex flex-col justify-between"
     >
-      
-      {/* Dedicated Top Utility Bar with Safe Area & Camera Cutout Clearance (Pages 2, 3, 4, 5) */}
+      {/* Dedicated Top Utility Bar */}
       {currentPage > 1 && (
         <div className="w-full max-w-md mx-auto pt-[max(env(safe-area-inset-top,0px)+0.75rem,2.75rem)] px-6 flex items-center justify-between z-30 shrink-0">
           {currentPage > 2 ? (
@@ -141,7 +154,7 @@ export default function SplashScreen({
                   setAuthSubStep('methods');
                   setError(null);
                 } else {
-                  setCurrentPage(p => p - 1);
+                  setCurrentPage((p) => (p - 1) as OnboardingPage);
                 }
               }}
               className="p-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 text-slate-600 dark:text-slate-400 hover:text-[#3661B6] dark:hover:text-[#3661B6] transition-all shadow-sm backdrop-blur-md cursor-pointer"
@@ -153,7 +166,6 @@ export default function SplashScreen({
             <div className="w-10 h-10" />
           )}
 
-          {/* Center spacing naturally open for camera punch-hole / notch */}
           <div className="flex-1" />
 
           {/* Theme Switcher Button */}
@@ -167,10 +179,9 @@ export default function SplashScreen({
         </div>
       )}
 
-      {/* Main Page Container with AnimatePresence */}
+      {/* Main Page Container */}
       <AnimatePresence mode="wait">
-        
-        {/* ==================== PAGE 1: SPLASH COVER SCREEN ==================== */}
+        {/* ==================== PAGE 1 ==================== */}
         {currentPage === 1 && (
           <motion.div
             key="page-1"
@@ -185,7 +196,6 @@ export default function SplashScreen({
             }}
             className={`fixed inset-0 z-50 w-full h-full flex flex-col items-center justify-center overflow-hidden bg-slate-900 ${isLoggedInUser ? 'cursor-default' : 'cursor-pointer'}`}
           >
-            {/* Background Image from src/assets/images */}
             <img
               src={splashBgImage}
               alt="Splash Background"
@@ -193,7 +203,6 @@ export default function SplashScreen({
               referrerPolicy="no-referrer"
             />
 
-            {/* Centered logo, wordmark, and punchline */}
             <motion.div
               initial={{ scale: 0.92, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -205,7 +214,6 @@ export default function SplashScreen({
               <ViadiaPunchline className="w-[280px] sm:w-[320px] h-auto drop-shadow-md mt-1" />
             </motion.div>
 
-            {/* Subtle tap prompt or Loading status */}
             <div className="absolute bottom-10 left-0 right-0 text-center z-10">
               <span className="text-white/80 text-xs font-bold tracking-widest uppercase animate-pulse drop-shadow-md">
                 {isLoggedInUser ? 'Loading your trips' : 'Tap to continue'}
@@ -214,7 +222,7 @@ export default function SplashScreen({
           </motion.div>
         )}
 
-        {/* ==================== PAGE 2: PLAN TRIPS YOUR WAY ==================== */}
+        {/* ==================== PAGE 2 ==================== */}
         {currentPage === 2 && (
           <motion.div
             key="page-2"
@@ -224,7 +232,6 @@ export default function SplashScreen({
             transition={{ duration: 0.35, ease: "easeInOut" }}
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-between px-6 pt-2 pb-8 sm:pb-10 z-10"
           >
-            {/* Top Illustration (Below camera cutout and theme toggle) */}
             <div className="w-full pt-2">
               <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm">
                 <img
@@ -236,7 +243,6 @@ export default function SplashScreen({
               </div>
             </div>
 
-            {/* Center Text Content */}
             <div className="text-center my-auto py-5 space-y-2 max-w-sm mx-auto">
               <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
                 Plan trips
@@ -249,7 +255,6 @@ export default function SplashScreen({
               </p>
             </div>
 
-            {/* Bottom Navigation Control Bar */}
             <div className="w-full flex items-center justify-between pt-4">
               <button
                 onClick={() => setCurrentPage(5)}
@@ -258,14 +263,12 @@ export default function SplashScreen({
                 Skip
               </button>
 
-              {/* 3 Pagination Dots */}
               <div className="flex items-center space-x-2">
                 <div className="w-2.5 h-2.5 bg-[#3661B6] rounded-full transition-all" />
                 <div className="w-2.5 h-2.5 bg-slate-300 dark:bg-slate-800 rounded-full" />
                 <div className="w-2.5 h-2.5 bg-slate-300 dark:bg-slate-800 rounded-full" />
               </div>
 
-              {/* Next Button */}
               <button
                 onClick={() => setCurrentPage(3)}
                 className="w-12 h-12 rounded-full bg-[#3661B6] hover:bg-[#2C5199] text-white flex items-center justify-center shadow-lg hover:shadow-xl transition-all cursor-pointer hover:scale-105 active:scale-95"
@@ -276,7 +279,7 @@ export default function SplashScreen({
           </motion.div>
         )}
 
-        {/* ==================== PAGE 3: TRACK EVERYTHING IN REAL-TIME ==================== */}
+        {/* ==================== PAGE 3 ==================== */}
         {currentPage === 3 && (
           <motion.div
             key="page-3"
@@ -286,7 +289,6 @@ export default function SplashScreen({
             transition={{ duration: 0.35, ease: "easeInOut" }}
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-between px-6 pt-2 pb-8 sm:pb-10 z-10"
           >
-            {/* Top Illustration (Below camera cutout and theme toggle) */}
             <div className="w-full pt-2">
               <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm">
                 <img
@@ -298,7 +300,6 @@ export default function SplashScreen({
               </div>
             </div>
 
-            {/* Center Text Content */}
             <div className="text-center my-auto py-5 space-y-2 max-w-sm mx-auto">
               <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
                 Track everything
@@ -311,7 +312,6 @@ export default function SplashScreen({
               </p>
             </div>
 
-            {/* Bottom Navigation Control Bar */}
             <div className="w-full flex items-center justify-between pt-4">
               <button
                 onClick={() => setCurrentPage(5)}
@@ -320,14 +320,12 @@ export default function SplashScreen({
                 Skip
               </button>
 
-              {/* 3 Pagination Dots */}
               <div className="flex items-center space-x-2">
                 <div className="w-2.5 h-2.5 bg-slate-300 dark:bg-slate-800 rounded-full" />
                 <div className="w-2.5 h-2.5 bg-[#3661B6] rounded-full transition-all" />
                 <div className="w-2.5 h-2.5 bg-slate-300 dark:bg-slate-800 rounded-full" />
               </div>
 
-              {/* Next Button */}
               <button
                 onClick={() => setCurrentPage(4)}
                 className="w-12 h-12 rounded-full bg-[#3661B6] hover:bg-[#2C5199] text-white flex items-center justify-center shadow-lg hover:shadow-xl transition-all cursor-pointer hover:scale-105 active:scale-95"
@@ -338,7 +336,7 @@ export default function SplashScreen({
           </motion.div>
         )}
 
-        {/* ==================== PAGE 4: SHARE YOUR TRIP ==================== */}
+        {/* ==================== PAGE 4 ==================== */}
         {currentPage === 4 && (
           <motion.div
             key="page-4"
@@ -348,7 +346,6 @@ export default function SplashScreen({
             transition={{ duration: 0.35, ease: "easeInOut" }}
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-between px-6 pt-2 pb-8 sm:pb-10 z-10"
           >
-            {/* Top Illustration (Below camera cutout and theme toggle) */}
             <div className="w-full pt-2">
               <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm">
                 <img
@@ -360,7 +357,6 @@ export default function SplashScreen({
               </div>
             </div>
 
-            {/* Center Text Content */}
             <div className="text-center my-auto py-5 space-y-2 max-w-sm mx-auto">
               <h2 className="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white tracking-tight">
                 Share your trip
@@ -373,7 +369,6 @@ export default function SplashScreen({
               </p>
             </div>
 
-            {/* Bottom Navigation Control Bar */}
             <div className="w-full flex items-center justify-between pt-4">
               <button
                 onClick={() => setCurrentPage(5)}
@@ -382,14 +377,12 @@ export default function SplashScreen({
                 Skip
               </button>
 
-              {/* 3 Pagination Dots */}
               <div className="flex items-center space-x-2">
                 <div className="w-2.5 h-2.5 bg-slate-300 dark:bg-slate-800 rounded-full" />
                 <div className="w-2.5 h-2.5 bg-slate-300 dark:bg-slate-800 rounded-full" />
                 <div className="w-2.5 h-2.5 bg-[#3661B6] rounded-full transition-all" />
               </div>
 
-              {/* Next Button */}
               <button
                 onClick={() => setCurrentPage(5)}
                 className="w-12 h-12 rounded-full bg-[#3661B6] hover:bg-[#2C5199] text-white flex items-center justify-center shadow-lg hover:shadow-xl transition-all cursor-pointer hover:scale-105 active:scale-95"
@@ -400,7 +393,7 @@ export default function SplashScreen({
           </motion.div>
         )}
 
-        {/* ==================== PAGE 5: SIGN IN / GET STARTED ==================== */}
+        {/* ==================== PAGE 5 ==================== */}
         {currentPage === 5 && (
           <motion.div
             key="page-5"
@@ -410,7 +403,6 @@ export default function SplashScreen({
             transition={{ duration: 0.35, ease: "easeInOut" }}
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-center px-6 pb-10 pt-4 z-10"
           >
-            {/* Top Centered Brand Logo */}
             <div className="flex flex-col items-center justify-center space-y-3 mb-8">
               <ViadiaLogo className="w-[100px] h-[100px] filter drop-shadow-md" animateRoad={false} />
               <ViadiaWordmark className="w-[100px] h-auto text-[#170C52] dark:text-white drop-shadow-sm" />
@@ -426,7 +418,6 @@ export default function SplashScreen({
                   transition={{ duration: 0.25 }}
                   className="space-y-6 w-full"
                 >
-                  {/* Title & Subtitle */}
                   <div className="text-center space-y-1.5">
                     <h2 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
                       Let's get you started
@@ -436,9 +427,7 @@ export default function SplashScreen({
                     </p>
                   </div>
 
-                  {/* Action Buttons */}
                   <div className="space-y-3 pt-2">
-                    {/* Option 1: Email Magic Link */}
                     <button
                       onClick={() => {
                         setError(null);
@@ -447,10 +436,9 @@ export default function SplashScreen({
                       className="w-full h-13 bg-[#3661B6] hover:bg-[#2C5199] text-white rounded-2xl font-bold text-sm flex items-center justify-center space-x-3 shadow-md hover:shadow-lg transition-all cursor-pointer"
                     >
                       <Mail className="w-5 h-5 shrink-0" />
-                      <span>Sign in with Email Magic Link</span>
+                      <span>Sign in with Email</span>
                     </button>
 
-                    {/* Option 2: Continue with Google */}
                     {isLoggingIn ? (
                       <button
                         disabled
@@ -477,14 +465,12 @@ export default function SplashScreen({
                       </button>
                     )}
 
-                    {/* Separator Divider */}
                     <div className="flex items-center space-x-3 py-1">
                       <div className="flex-grow h-[1px] bg-slate-200 dark:bg-slate-800" />
                       <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">or</span>
                       <div className="flex-grow h-[1px] bg-slate-200 dark:bg-slate-800" />
                     </div>
 
-                    {/* Option 3: Continue as Guest */}
                     <button
                       onClick={() => {
                         setError(null);
@@ -506,7 +492,6 @@ export default function SplashScreen({
                     </div>
                   )}
 
-                  {/* Terms Disclaimer */}
                   <p className="text-xs text-slate-400 dark:text-slate-500 text-center pt-6 max-w-xs mx-auto leading-relaxed font-medium">
                     By continuing, you agree to our{' '}
                     <span className="text-[#3661B6] dark:text-[#3661B6] font-semibold cursor-pointer hover:underline">
@@ -515,7 +500,6 @@ export default function SplashScreen({
                   </p>
                 </motion.div>
               ) : authSubStep === 'magic-link' ? (
-                /* ==================== MAGIC LINK VIEW ==================== */
                 <motion.div
                   key="magic-link-view"
                   initial={{ opacity: 0, y: 10 }}
@@ -541,7 +525,7 @@ export default function SplashScreen({
                         {linkSent ? 'Check Your Email' : 'Sign in with Email'}
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                        {linkSent ? `Magic link sent to ${emailInput}` : 'Enter your email to receive a passwordless sign-in link'}
+                        {linkSent ? `Link sent to ${emailInput}` : 'Enter your email to receive a passwordless sign-in link'}
                       </p>
                     </div>
                   </div>
@@ -585,7 +569,7 @@ export default function SplashScreen({
                           </>
                         ) : (
                           <>
-                            <span>Send Magic Link</span>
+                            <span>Send Link</span>
                             <ArrowRight className="w-4.5 h-4.5" />
                           </>
                         )}
@@ -595,7 +579,7 @@ export default function SplashScreen({
                     <div className="space-y-4 pt-1">
                       {linkSentNotice && (
                         <div className="p-4 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/50 rounded-2xl text-xs font-semibold leading-relaxed">
-                          <p className="font-extrabold text-sm mb-1">Magic Link Sent!</p>
+                          <p className="font-extrabold text-sm mb-1">Link Sent!</p>
                           <p>{linkSentNotice}</p>
                         </div>
                       )}
@@ -614,7 +598,6 @@ export default function SplashScreen({
                   )}
                 </motion.div>
               ) : (
-                /* ==================== GUEST / GOOGLE NAME PROMPT PAGE ==================== */
                 <motion.div
                   key="name-input-view"
                   initial={{ opacity: 0, y: 10 }}
@@ -649,18 +632,63 @@ export default function SplashScreen({
                   </div>
 
                   <form onSubmit={handleNameSubmit} className="space-y-4 pt-1">
-                    <input
-                      type="text"
-                      required
-                      autoFocus
-                      value={guestName}
-                      onChange={(e) => {
-                        setGuestName(e.target.value);
-                        setError(null);
-                      }}
-                      placeholder="e.g. Alex Rivera"
-                      className="w-full h-13 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl font-semibold text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#3661B6] transition-all shadow-inner"
-                    />
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Display Name <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        autoFocus
+                        value={guestName}
+                        onChange={(e) => {
+                          setGuestName(e.target.value);
+                          setError(null);
+                        }}
+                        placeholder="e.g. Alex Rivera"
+                        className="w-full h-13 px-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl font-semibold text-sm text-slate-800 dark:text-slate-100 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#3661B6] transition-all shadow-inner"
+                      />
+                    </div>
+
+                    {/* Default Currency Selector */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Default Trip Currency
+                      </label>
+                      {(() => {
+                        const curInfo = getCurrencyFlagAndInfo(selectedCurrency);
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => setShowCurrencyModal(true)}
+                            className="w-full p-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-600 rounded-2xl flex items-center justify-between transition-all cursor-pointer shadow-inner text-left"
+                          >
+                            <div className="flex items-center space-x-3 min-w-0">
+                              <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center text-lg shrink-0">
+                                {curInfo.flag}
+                              </div>
+                              <div className="truncate">
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="text-xs font-extrabold font-mono text-slate-900 dark:text-white">
+                                    {curInfo.code}
+                                  </span>
+                                  <span className="text-xs text-slate-400 font-bold">
+                                    ({curInfo.symbol})
+                                  </span>
+                                </div>
+                                <span className="text-[11px] text-slate-500 dark:text-slate-400 block truncate">
+                                  {curInfo.name}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center space-x-1 text-xs font-bold text-indigo-600 dark:text-indigo-400 pl-2 shrink-0">
+                              <span>Change</span>
+                              <ChevronRight className="w-4 h-4" />
+                            </div>
+                          </button>
+                        );
+                      })()}
+                    </div>
 
                     {error && (
                       <p className="text-xs text-rose-500 font-semibold px-1">{error}</p>
@@ -681,6 +709,16 @@ export default function SplashScreen({
                       )}
                     </button>
                   </form>
+
+                  {/* Currency Picker Modal Bottom Sheet */}
+                  <CurrencyPickerBottomSheet
+                    isOpen={showCurrencyModal}
+                    onClose={() => setShowCurrencyModal(false)}
+                    selectedCurrency={selectedCurrency}
+                    onSelectCurrency={(code) => setSelectedCurrency(code)}
+                    title="Select Preferred Currency"
+                    subtitle="Default base currency used when creating new travel plans."
+                  />
                 </motion.div>
               )}
             </AnimatePresence>

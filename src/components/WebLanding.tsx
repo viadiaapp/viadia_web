@@ -29,12 +29,15 @@ import { ViadiaLogo, ViadiaWordmark } from './BrandComponents';
 import heroVideo from '../assets/video/viadia_hero.mp4';
 import { onboardingPlanImage, onboardingTrackImage, onboardingListImage } from '../assets/splash';
 import { sendInboundMessage } from '../lib/db';
+import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
+import { staticCurrenciesSeed } from '../data/staticCurrencies';
+import { getDefaultCurrency, setUserPreferences } from '../lib/userPreferences';
 
 interface WebLandingProps {
   onLoginWithGoogle: () => void;
   onLoginWithApple?: () => void;
-  onContinueAsGuest: (name: string) => void;
-  onRegisterGoogleName: (name: string) => void;
+  onContinueAsGuest: (name: string, defaultCurrency?: string) => void;
+  onRegisterGoogleName: (name: string, defaultCurrency?: string) => void;
   onSendMagicLink?: (email: string) => Promise<{ success: boolean; message: string }>;
   isLoggingIn: boolean;
   theme: 'light' | 'dark';
@@ -42,6 +45,27 @@ interface WebLandingProps {
   loginError?: string | null;
   googleUserNeedName: boolean;
 }
+
+const CURRENCY_FLAG_MAP = new Map<string, string>();
+const PRIORITY_CURRENCY_FLAGS: { [code: string]: string } = {
+  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', INR: '🇮🇳', AUD: '🇦🇺', CAD: '🇨🇦',
+  JPY: '🇯🇵', CNY: '🇨🇳', CHF: '🇨🇭', NZD: '🇳🇿', SGD: '🇸🇬', HKD: '🇭🇰',
+  SEK: '🇸🇪', KRW: '🇰🇷', NOK: '🇳🇴', MXN: '🇲🇽', BRL: '🇧🇷', ZAR: '🇿🇦',
+  AED: '🇦🇪', THB: '🇹🇭',
+};
+
+staticCurrenciesSeed.forEach((c) => {
+  if (c.currencyCode && c.flagEmoji) {
+    const code = c.currencyCode.toUpperCase();
+    if (!CURRENCY_FLAG_MAP.has(code)) {
+      CURRENCY_FLAG_MAP.set(code, c.flagEmoji);
+    }
+  }
+});
+
+Object.entries(PRIORITY_CURRENCY_FLAGS).forEach(([code, flag]) => {
+  CURRENCY_FLAG_MAP.set(code, flag);
+});
 
 export default function WebLanding({
   onLoginWithGoogle,
@@ -58,22 +82,18 @@ export default function WebLanding({
   const [showSignInModal, setShowSignInModal] = useState(false);
   const [authSubStep, setAuthSubStep] = useState<'methods' | 'magic-link' | 'guest-name' | 'google-name'>('methods');
   const [guestName, setGuestName] = useState('');
+  const [selectedCurrency, setSelectedCurrency] = useState<string>(() => getDefaultCurrency());
+  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [linkSent, setLinkSent] = useState(false);
   const [isSendingLink, setIsSendingLink] = useState(false);
   const [linkSentNotice, setLinkSentNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Video Ref for robust autoplay handling
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  // Mobile navigation drawer state
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  // Section 4 FAQ State
   const [activeFaq, setActiveFaq] = useState<number | null>(0);
 
-  // Section 4 Contact Us Form State
   const [contactName, setContactName] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactCategory, setContactCategory] = useState<'support' | 'feature' | 'bug' | 'other'>('support');
@@ -88,7 +108,6 @@ export default function WebLanding({
     }
   }, [googleUserNeedName]);
 
-  // Video autoplay trigger
   useEffect(() => {
     const video = videoRef.current;
     if (video) {
@@ -122,10 +141,13 @@ export default function WebLanding({
       return;
     }
     setError(null);
+    const currencyToSave = (selectedCurrency || 'USD').toUpperCase().trim();
+    setUserPreferences({ defaultCurrency: currencyToSave });
+
     if (authSubStep === 'guest-name') {
-      onContinueAsGuest(guestName.trim());
+      onContinueAsGuest(guestName.trim(), currencyToSave);
     } else if (authSubStep === 'google-name') {
-      onRegisterGoogleName(guestName.trim());
+      onRegisterGoogleName(guestName.trim(), currencyToSave);
     }
   };
 
@@ -257,6 +279,23 @@ export default function WebLanding({
     }
   ];
 
+  const currenciesForSheet = useMemo(() => {
+    const map = new Map<string, { code: string; name: string; symbol: string }>();
+    staticCurrenciesSeed.forEach((c) => {
+      if (!map.has(c.currencyCode)) {
+        map.set(c.currencyCode, {
+          code: c.currencyCode,
+          name: c.currencyName,
+          symbol: c.currencySymbol,
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code)).map((c) => ({
+      ...c,
+      flag: CURRENCY_FLAG_MAP.get(c.code.toUpperCase()) || '🌐',
+    }));
+  }, []);
+
   const isDark = theme === 'dark';
 
   return (
@@ -266,7 +305,7 @@ export default function WebLanding({
         : 'bg-slate-50 text-slate-900 selection:bg-indigo-600 selection:text-white'
     }`}>
       
-      {/* Navigation Bar Header (STICKY TOP) */}
+      {/* Navigation Bar Header */}
       <header className={`sticky top-0 z-50 backdrop-blur-xl border-b transition-colors shadow-sm ${
         isDark 
           ? 'bg-slate-950/85 border-white/10 text-white' 
@@ -310,7 +349,6 @@ export default function WebLanding({
               <ArrowRight className="h-4 w-4" />
             </button>
 
-            {/* Mobile / Tablet: hamburger toggle (nav links hidden below lg) */}
             <button
               onClick={() => setMobileMenuOpen((prev) => !prev)}
               className={`lg:hidden p-2 sm:p-2.5 rounded-2xl border transition shadow-sm cursor-pointer ${
@@ -326,7 +364,6 @@ export default function WebLanding({
           </div>
         </div>
 
-        {/* Mobile / Tablet Dropdown Nav */}
         <AnimatePresence initial={false}>
           {mobileMenuOpen && (
             <motion.div
@@ -352,9 +389,6 @@ export default function WebLanding({
                     onClick={(e) => {
                       e.preventDefault();
                       setMobileMenuOpen(false);
-                      // Wait for the dropdown's collapse animation to finish
-                      // before scrolling — otherwise the closing menu shifts
-                      // the page layout mid-scroll and the jump lands short.
                       window.setTimeout(() => {
                         document.querySelector(link.href)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                       }, 220);
@@ -383,10 +417,8 @@ export default function WebLanding({
         </AnimatePresence>
       </header>
 
-      {/* ================= 1ST PAGE: HERO SECTION (VIDEO BACKGROUND + 4 COLORED LINES ONLY) ================= */}
+      {/* HERO SECTION */}
       <section id="hero" className="relative isolate min-h-[calc(100svh-73px)] flex flex-col justify-center items-start px-6 sm:px-12 md:px-16 lg:px-24 py-16 overflow-hidden text-left bg-black scroll-mt-20">
-        
-        {/* Background Video */}
         <video 
           ref={videoRef}
           autoPlay 
@@ -400,12 +432,9 @@ export default function WebLanding({
           <source src={heroVideo} type="video/mp4" />
         </video>
 
-        {/* Black Tint Overlay */}
         <div className="absolute inset-0 bg-black/70 backdrop-blur-[1px] z-10 pointer-events-none" />
 
-        {/* Foreground Content - colored headline on the left, app download badges on the right */}
         <div className="relative z-20 w-full max-w-[1400px] flex flex-col lg:flex-row lg:items-end lg:justify-between gap-10 lg:gap-6">
-          
           <div className="max-w-5xl text-left space-y-1 sm:space-y-2">
             <h1 className="text-4xl sm:text-7xl md:text-7xl lg:text-8xl font-black tracking-tight leading-[1.05] uppercase select-none">
               <span className="block text-[#3B77B5] drop-shadow-[0_4px_30px_rgba(59,119,181,0.6)]">
@@ -422,42 +451,13 @@ export default function WebLanding({
               </span>
             </h1>
           </div>
-
-          {/* App Download Badges (Hidden until store links/apps are live) */}
-          {/* <div className="flex flex-row sm:flex-row lg:flex-col gap-2 sm:gap-3 shrink-0">
-            <a
-              href="#"
-              className="flex items-center justify-center gap-2 sm:gap-3 min-w-[150px] sm:min-w-[190px] px-3.5 py-2 sm:px-5 sm:py-3 rounded-xl sm:rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/15 hover:border-white/30 transition-all active:scale-95 cursor-pointer"
-            >
-              <Smartphone className="h-5 w-5 sm:h-6 sm:w-6 text-white shrink-0" strokeWidth={1.75} />
-              <div className="text-left leading-tight">
-                <p className="text-[8px] sm:text-[10px] text-white/70 font-semibold uppercase tracking-wider">Download on the</p>
-                <p className="text-[11px] sm:text-sm font-extrabold text-white -mt-0.5">App Store</p>
-              </div>
-            </a>
-
-            <a
-              href="#"
-              className="flex items-center justify-center gap-2 sm:gap-3 min-w-[150px] sm:min-w-[190px] px-3.5 py-2 sm:px-5 sm:py-3 rounded-xl sm:rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 hover:bg-white/15 hover:border-white/30 transition-all active:scale-95 cursor-pointer"
-            >
-              <Play className="h-5 w-5 sm:h-6 sm:w-6 text-white fill-white shrink-0" strokeWidth={1.75} />
-              <div className="text-left leading-tight">
-                <p className="text-[8px] sm:text-[10px] text-white/70 font-semibold uppercase tracking-wider">Get it on</p>
-                <p className="text-[11px] sm:text-sm font-extrabold text-white -mt-0.5">Google Play</p>
-              </div>
-            </a>
-          </div> */}
-
         </div>
-
       </section>
 
-      {/* ================= 2ND PAGE: TRAVEL MODULES — BOARDING PASS CARDS ================= */}
+      {/* TRAVEL MODULES */}
       <section id="modules" className={`max-w-7xl mx-auto px-6 py-20 sm:py-24 border-t relative z-10 transition-colors scroll-mt-20 ${
         isDark ? 'border-white/10' : 'border-slate-200'
       }`}>
-        
-        {/* Section Header */}
         <div className="text-center space-y-4 max-w-2xl mx-auto mb-14 sm:mb-16">
           <h2 className={`text-3xl sm:text-5xl font-black tracking-tight ${
             isDark ? 'text-white' : 'text-slate-900'
@@ -471,12 +471,10 @@ export default function WebLanding({
           </p>
         </div>
 
-        {/* Boarding Pass Row — always a single horizontal line; scrolls instead of wrapping on any screen size */}
         <div className="-mx-6 px-6 overflow-x-auto pb-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <div className="flex flex-nowrap gap-6 lg:gap-8 snap-x snap-mandatory">
           {travelModules.map((mod, idx) => {
             const Icon = mod.icon;
-            // Deterministic little "barcode" — bar heights derived from the module id so it stays stable across renders
             const barHeights = [10, 16, 8, 20, 12, 18, 9, 14, 20, 11, 16, 8, 19, 13, 10, 17];
             return (
               <motion.div
@@ -491,10 +489,8 @@ export default function WebLanding({
                     : 'bg-white border-slate-200 shadow-slate-200/80'
                 }`}
               >
-                {/* Accent top edge */}
                 <div className={`h-1.5 w-full bg-gradient-to-r ${mod.accentColor}`} />
 
-                {/* Photo banner — postcard stub, tinted to the module's accent, code stamped top-right */}
                 <div className="relative h-40 sm:h-44 overflow-hidden">
                   <img
                     src={mod.image}
@@ -523,7 +519,6 @@ export default function WebLanding({
                   </div>
                 </div>
 
-                {/* Main stub: copy + checklist */}
                 <div className="p-6 sm:p-7 space-y-5">
                   <p className={`text-xs sm:text-sm leading-relaxed ${
                     isDark ? 'text-slate-300' : 'text-slate-600'
@@ -545,7 +540,6 @@ export default function WebLanding({
                   </div>
                 </div>
 
-                {/* Perforation line with punched notches, like a torn ticket edge */}
                 <div className={`relative border-t-2 border-dashed ${isDark ? 'border-slate-700' : 'border-slate-300'}`}>
                   <span className={`absolute -left-3 top-1/2 -translate-y-1/2 h-6 w-6 rounded-full ${
                     isDark ? 'bg-[#060913]' : 'bg-slate-50'
@@ -555,7 +549,6 @@ export default function WebLanding({
                   }`} />
                 </div>
 
-                {/* Ticket footer stub: barcode + module tag */}
                 <div className={`px-6 sm:px-7 py-4 flex items-center justify-between gap-4 ${
                   isDark ? 'bg-slate-950/50' : 'bg-slate-50'
                 }`}>
@@ -577,18 +570,15 @@ export default function WebLanding({
               </motion.div>
             );
           })}
-          {/* Trailing spacer — trailing padding on a scroll container is often ignored by mobile browsers; a real element guarantees breathing room after the last card */}
           <div className="w-6 shrink-0" aria-hidden="true" />
           </div>
         </div>
-
       </section>
 
-      {/* ================= 3RD PAGE: APP SHARING & 100% OFFLINE MODE ================= */}
+      {/* SHARING & OFFLINE SECTION */}
       <section id="features" className={`max-w-7xl mx-auto px-6 py-24 border-t relative z-10 transition-colors scroll-mt-20 ${
         isDark ? 'border-white/10' : 'border-slate-200'
       }`}>
-        
         <div className="text-center space-y-4 max-w-2xl mx-auto mb-16">
           <h2 className={`text-3xl sm:text-5xl font-black tracking-tight ${
             isDark ? 'text-white' : 'text-slate-900'
@@ -604,8 +594,6 @@ export default function WebLanding({
 
         <div className="-mx-6 px-6 overflow-x-auto pb-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <div className="flex flex-nowrap lg:justify-center gap-6 md:gap-8 snap-x snap-mandatory text-left lg:mx-auto">
-          
-          {/* Feature 1: App & Trip Sharing */}
           <div className={`w-[82vw] sm:w-[420px] lg:w-[480px] shrink-0 snap-start p-6 sm:p-8 lg:p-10 rounded-3xl border space-y-6 transition-all shadow-xl group ${
             isDark 
               ? 'bg-slate-900/90 border-slate-800 hover:border-teal-500/40 text-white' 
@@ -638,7 +626,6 @@ export default function WebLanding({
             </div>
           </div>
 
-          {/* Feature 2: 100% Offline Mode */}
           <div className={`w-[82vw] sm:w-[420px] lg:w-[480px] shrink-0 snap-start p-6 sm:p-8 lg:p-10 rounded-3xl border space-y-6 transition-all shadow-xl group ${
             isDark 
               ? 'bg-slate-900/90 border-slate-800 hover:border-indigo-500/40 text-white' 
@@ -674,14 +661,12 @@ export default function WebLanding({
           <div className="w-6 lg:hidden shrink-0" aria-hidden="true" />
           </div>
         </div>
-
       </section>
 
-      {/* ================= 4TH PAGE: FAQS ================= */}
+      {/* FAQS SECTION */}
       <section id="faqs" className={`max-w-7xl mx-auto px-6 py-20 sm:py-24 border-t relative z-10 transition-colors scroll-mt-20 ${
         isDark ? 'border-white/10' : 'border-slate-200'
       }`}>
-        
         <div className="text-center space-y-4 max-w-2xl mx-auto mb-14 sm:mb-16">
           <h2 className={`text-3xl sm:text-5xl font-black tracking-tight flex items-center justify-center gap-3 ${
             isDark ? 'text-white' : 'text-slate-900'
@@ -733,14 +718,12 @@ export default function WebLanding({
             );
           })}
         </div>
-
       </section>
 
-      {/* ================= 5TH PAGE: CONTACT US ================= */}
+      {/* CONTACT SECTION */}
       <section id="contact" className={`max-w-7xl mx-auto px-6 py-20 sm:py-24 border-t relative z-10 transition-colors scroll-mt-20 ${
         isDark ? 'border-white/10' : 'border-slate-200'
       }`}>
-
         <div className="text-center space-y-4 max-w-2xl mx-auto mb-10 sm:mb-12">
           <h2 className={`text-3xl sm:text-5xl font-black tracking-tight flex items-center justify-center gap-3 ${
             isDark ? 'text-white' : 'text-slate-900'
@@ -759,7 +742,6 @@ export default function WebLanding({
           <div className={`p-6 sm:p-8 rounded-3xl border space-y-6 shadow-2xl ${
             isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-200 text-slate-900 shadow-slate-200/80'
           }`}>
-
             {contactSuccess ? (
               <div className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 text-xs text-center space-y-2">
                 <CheckCircle2 className="h-8 w-8 mx-auto text-emerald-500" />
@@ -853,13 +835,11 @@ export default function WebLanding({
                 </button>
               </form>
             )}
-
           </div>
         </div>
-
       </section>
 
-      {/* Footer */}
+      {/* FOOTER */}
       <footer className={`border-t py-10 text-xs transition-colors ${
         isDark ? 'border-white/10 bg-slate-950 text-slate-400' : 'border-slate-200 bg-white text-slate-600'
       }`}>
@@ -880,7 +860,7 @@ export default function WebLanding({
         </div>
       </footer>
 
-      {/* ================= SIGN IN MODAL ================= */}
+      {/* SIGN IN MODAL */}
       {showSignInModal && (
         <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 animate-in fade-in duration-200 ${
           isDark ? 'bg-slate-950/85 backdrop-blur-md' : 'bg-slate-900/60 backdrop-blur-sm'
@@ -889,7 +869,6 @@ export default function WebLanding({
             isDark ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
           }`}>
             
-            {/* Modal Close Button */}
             <button
               onClick={() => {
                 setShowSignInModal(false);
@@ -902,7 +881,6 @@ export default function WebLanding({
               <span className="text-lg font-bold leading-none">×</span>
             </button>
 
-            {/* Modal Header */}
             <div className="text-center space-y-2 pt-2">
               <div className="mx-auto w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center mb-2">
                 <ViadiaLogo className="w-8 h-8" animateRoad={false} />
@@ -913,7 +891,6 @@ export default function WebLanding({
               </p>
             </div>
 
-            {/* Error Message */}
             {(loginError || error) && (
               <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-xs flex items-start space-x-2">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -921,10 +898,8 @@ export default function WebLanding({
               </div>
             )}
 
-            {/* SubStep: Methods */}
             {authSubStep === 'methods' && (
               <div className="space-y-3">
-                {/* Email Magic Link option */}
                 <button
                   type="button"
                   onClick={() => {
@@ -980,7 +955,6 @@ export default function WebLanding({
               </div>
             )}
 
-            {/* SubStep: Email Magic Link Input */}
             {authSubStep === 'magic-link' && (
               <div className="space-y-4">
                 {!linkSent ? (
@@ -1065,45 +1039,97 @@ export default function WebLanding({
               </div>
             )}
 
-            {/* SubStep: Guest Name Input */}
             {(authSubStep === 'guest-name' || authSubStep === 'google-name') && (
-              <form onSubmit={handleNameSubmit} className="space-y-4">
-                <div>
-                  <label className={`block text-xs font-bold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                    Display Name <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Alex Rivera"
-                    value={guestName}
-                    onChange={(e) => setGuestName(e.target.value)}
-                    className={`w-full px-4 py-3 rounded-2xl text-xs font-medium outline-none transition ${
-                      isDark 
-                        ? 'bg-slate-950 border border-slate-800 text-white focus:border-indigo-500' 
-                        : 'bg-slate-100 border border-slate-300 text-slate-900 focus:border-indigo-600 focus:bg-white'
-                    }`}
-                  />
-                </div>
+              <>
+                <form onSubmit={handleNameSubmit} className="space-y-4">
+                  <div>
+                    <label className={`block text-xs font-bold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                      Display Name <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Alex Rivera"
+                      value={guestName}
+                      onChange={(e) => setGuestName(e.target.value)}
+                      className={`w-full px-4 py-3 rounded-2xl text-xs font-medium outline-none transition ${
+                        isDark 
+                          ? 'bg-slate-950 border border-slate-800 text-white focus:border-indigo-500' 
+                          : 'bg-slate-100 border border-slate-300 text-slate-900 focus:border-indigo-600 focus:bg-white'
+                      }`}
+                    />
+                  </div>
 
-                <div className="flex items-center space-x-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setAuthSubStep('methods')}
-                    className={`px-4 py-3 rounded-2xl font-bold text-xs transition cursor-pointer ${
-                      isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                    }`}
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 px-4 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs shadow-md transition cursor-pointer"
-                  >
-                    Enter App
-                  </button>
-                </div>
-              </form>
+                  <div>
+                    <label className={`block text-xs font-bold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                      Default Trip Currency
+                    </label>
+                    {(() => {
+                      const upper = selectedCurrency.toUpperCase();
+                      const flag = CURRENCY_FLAG_MAP.get(upper) || '🌐';
+                      const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === upper);
+                      const name = match?.currencyName || upper;
+                      const symbol = match?.currencySymbol || '$';
+
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setShowCurrencyModal(true)}
+                          className={`w-full p-3 rounded-2xl border flex items-center justify-between transition cursor-pointer text-left ${
+                            isDark
+                              ? 'bg-slate-950 border-slate-800 hover:border-indigo-500'
+                              : 'bg-slate-100 border-slate-300 hover:border-indigo-600'
+                          }`}
+                        >
+                          <div className="flex items-center space-x-2.5 min-w-0">
+                            <span className="text-base shrink-0">{flag}</span>
+                            <div className="truncate">
+                              <span className="text-xs font-extrabold font-mono text-slate-900 dark:text-white">
+                                {upper}{' '}
+                                <span className="text-[10px] text-slate-400 font-bold">({symbol})</span>
+                              </span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 block truncate">
+                                {name}
+                              </span>
+                            </div>
+                          </div>
+                          <span className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
+                            Change
+                          </span>
+                        </button>
+                      );
+                    })()}
+                  </div>
+
+                  <div className="flex items-center space-x-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setAuthSubStep('methods')}
+                      className={`px-4 py-3 rounded-2xl font-bold text-xs transition cursor-pointer ${
+                        isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 px-4 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs shadow-md transition cursor-pointer"
+                    >
+                      Enter App
+                    </button>
+                  </div>
+                </form>
+
+                <CurrencyPickerBottomSheet
+                  isOpen={showCurrencyModal}
+                  onClose={() => setShowCurrencyModal(false)}
+                  currencies={currenciesForSheet}
+                  selectedCurrency={selectedCurrency}
+                  onSelectCurrency={(code) => setSelectedCurrency(code)}
+                  title="Select Preferred Currency"
+                  subtitle="Default base currency used when creating new travel plans."
+                />
+              </>
             )}
 
             <div className="text-center pt-2">

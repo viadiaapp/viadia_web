@@ -207,7 +207,7 @@
     },
     "UserConfig": {
       "title": "UserConfig",
-      "description": "Stores user configurations and global checklist keyed by userCode.",
+      "description": "Stores user configurations, default currency, unit preferences, and global checklist keyed by userCode.",
       "type": "object",
       "properties": {
         "userCode": {
@@ -218,6 +218,24 @@
         "globalChecklist": {
           "type": "array",
           "description": "Global checklist template across all travels."
+        },
+        "defaultCurrency": {
+          "type": "string",
+          "description": "User's default base currency (e.g. USD, EUR, GBP, INR)."
+        },
+        "temperatureUnit": {
+          "type": "string",
+          "enum": ["C", "F"],
+          "description": "User's preferred temperature measurement unit."
+        },
+        "distanceUnit": {
+          "type": "string",
+          "enum": ["km", "miles"],
+          "description": "User's preferred distance measurement unit."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "required": ["userCode", "globalChecklist"]

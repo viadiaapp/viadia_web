@@ -1,6 +1,9 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { User } from 'firebase/auth';
+import { StatusBar } from '@capacitor/status-bar';
+import { Capacitor } from '@capacitor/core';
+import { ScreenOrientation } from '@capacitor/screen-orientation';
 import { initAuth, googleSignIn, appleSignIn, sendMagicLink, logout, auth, getLoginProvider, isOwnerOfTrip, getAuthErrorMessage } from './lib/auth';
 import { 
   getUserDetails, 
@@ -46,6 +49,7 @@ import AdBanner from './components/AdBanner';
 import NotFoundPage from './components/NotFoundPage';
 import LifetimePassModal from './components/LifetimePassModal';
 import { getUserTier, subscribeToTierChange, setUserSubscription, isSubscriptionActive, getSubscriptionStartDate, getSubscriptionEndDate, UserTier } from './lib/userSubscription';
+import { syncPreferencesFromConfig, getDefaultCurrency, setUserPreferences } from './lib/userPreferences';
 import { initBackButtonListener, useBackButton } from './lib/backButtonHandler';
 import { Compass, ShieldCheck, ShieldAlert, Globe, AlertCircle, Sparkles, RefreshCw, ArrowLeft, Share2, Loader2, Home, Calendar, Users, ArrowRight, Map, CheckSquare, Sun, Moon, Palette, LogOut, Settings, Check, ChevronDown } from 'lucide-react';
 import GlobalChecklistModal from './components/GlobalChecklistModal';
@@ -139,6 +143,30 @@ export default function App() {
   const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
   const [appMode, setAppMode] = useState<'splash' | 'google-sync' | 'joined-trip' | 'local'>('splash');
 
+  // Configure status bar overlay and hide for true full-screen mode on native platforms
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
+      StatusBar.hide().catch((err) => {
+        console.warn('Status bar hide failed:', err);
+      });
+    }
+  }, []);
+  
+  useEffect(() => {
+    const lockOrientation = async () => {
+      if (Capacitor.isNativePlatform()) {
+        try {
+          await ScreenOrientation.lock({ orientation: 'portrait' as any });
+        } catch (err) {
+          console.warn('Screen orientation lock failed:', err);
+        }
+      }
+    };
+
+    lockOrientation();
+  }, []);
+
   useEffect(() => {
     const unsub = subscribeToTierChange((newTier) => {
       setUserTier(newTier);
@@ -146,11 +174,11 @@ export default function App() {
     });
     return unsub;
   }, []);
+
   const [isNotFound, setIsNotFound] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname;
       const validKnownPaths = ['/', '', '/app', '/index.html'];
-      // Accept root paths, hash routes (/#...), search queries (?...)
       if (!validKnownPaths.includes(path) && !path.startsWith('/join/') && !path.startsWith('/trip/')) {
         return true;
       }
@@ -171,7 +199,6 @@ export default function App() {
     }
   }, [heroVideoError]);
 
-  // Split-JSON and sequential UserCode states
   const [userCode, setUserCode] = useState<string | null>(null);
   const [googleUserNeedName, setGoogleUserNeedName] = useState(false);
   const [tempGoogleUser, setTempGoogleUser] = useState<User | null>(null);
@@ -204,7 +231,6 @@ export default function App() {
     };
   }, []);
 
-  // Close the profile quick menu when clicking outside of it (button or portaled panel)
   useEffect(() => {
     if (!showQuickMenu) return;
     const handleClickOutside = (e: MouseEvent) => {
@@ -220,13 +246,12 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showQuickMenu]);
 
-  // Keep the portaled dropdown anchored under the pill (recompute on open + resize)
   useEffect(() => {
     if (!showQuickMenu) return;
     const updatePosition = () => {
       if (quickMenuButtonRef.current) {
         const rect = quickMenuButtonRef.current.getBoundingClientRect();
-        const isMobile = window.innerWidth < 640; // Tailwind's `sm` breakpoint
+        const isMobile = window.innerWidth < 640;
         setQuickMenuPosition({ top: rect.bottom + 12, left: rect.left, width: isMobile ? rect.width : undefined });
       }
     };
@@ -235,14 +260,6 @@ export default function App() {
     return () => window.removeEventListener('resize', updatePosition);
   }, [showQuickMenu]);
 
-  // Close the quick menu immediately on ANY scroll, anywhere on the page.
-  // `capture: true` on window catches scroll events from nested scrollable
-  // elements too (the main content container, the horizontal trip-card
-  // rows, etc.) since 'scroll' doesn't bubble but capture-phase listeners
-  // on an ancestor still see it. This is the reliable belt-and-braces fix —
-  // the overflow-hidden scroll lock alone isn't airtight (mobile momentum
-  // scroll can still slip through), so this closes the menu the instant
-  // any scroll is detected instead of trying to prevent scroll perfectly.
   useEffect(() => {
     if (!showQuickMenu) return;
     const closeOnScroll = () => {
@@ -270,7 +287,6 @@ export default function App() {
   }, [colorTheme]);
 
   useEffect(() => {
-    // Trigger haptic feedback when tab changes or active trip changes
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try {
         navigator.vibrate(12);
@@ -303,21 +319,6 @@ export default function App() {
     return false;
   };
 
-  // Helper to find the default trip: closest upcoming one, or fallback to latest overall
-  const getDefaultTripId = (trips: { [id: string]: Trip }) => {
-    const tripsList = Object.values(trips);
-    if (tripsList.length === 0) return null;
-    const nowStr = new Date().toISOString().split('T')[0];
-    // upcoming trips are those starting today/future OR are currently active/planned
-    const upcoming = tripsList.filter(t => t.status === 'active' || t.status === 'planned' || t.startDate >= nowStr);
-    if (upcoming.length > 0) {
-      // nearest upcoming first
-      return upcoming.sort((a, b) => a.startDate.localeCompare(b.startDate))[0].id;
-    }
-    // fallback to latest start date overall
-    return [...tripsList].sort((a, b) => b.startDate.localeCompare(a.startDate))[0]?.id || null;
-  };
-
   const activeTripIdToUse = activeTripId;
   const handleSetActiveTripId = (id: string | null) => {
     setActiveTripId(id);
@@ -328,13 +329,11 @@ export default function App() {
     }
   };
 
-  // Initialize native / Android hardware back button listener
   useEffect(() => {
     const cleanup = initBackButtonListener();
     return cleanup;
   }, []);
 
-  // Top-level modal back handlers (Priority 100)
   useBackButton('app-logout-confirm', showLogoutConfirmModal, () => setShowLogoutConfirmModal(false), 100);
   useBackButton('app-lifetime-pass', showLifetimePassModal, () => setShowLifetimePassModal(false), 100);
   useBackButton('app-quick-global-checklist', showQuickGlobalChecklist, () => setShowQuickGlobalChecklist(false), 100);
@@ -344,25 +343,18 @@ export default function App() {
   useBackButton('app-permission-error', permissionErrorModal !== null, () => setPermissionErrorModal(null), 100);
   useBackButton('app-quick-menu', showQuickMenu, () => { setShowQuickMenu(false); setShowAccentPicker(false); }, 90);
   useBackButton('app-accent-picker', showAccentPicker && !showQuickMenu, () => setShowAccentPicker(false), 90);
-
-  // Global Settings screen back handler (Priority 50) -> returns user to home screen
   useBackButton('app-global-settings', showGlobalSettings, () => setShowGlobalSettings(false), 50);
-
-  // Active Trip screen back handler (Planner, Expense Tracker, Lists, Summary, Settings) (Priority 30) -> returns user to home screen
   useBackButton('app-active-trip', activeTripId !== null && !showGlobalSettings, () => handleSetActiveTripId(null), 30);
 
-  // Helper to load cloud data from split-JSON Firestore structure
   const loadCloudData = async (userCodeToUse: string, localTripsToMerge?: { [id: string]: Trip }) => {
     try {
       setSyncStatus('syncing');
       const currentUid = auth.currentUser?.uid || user?.uid;
       const config = await getUserConfig(userCodeToUse);
       
-      // Fetch user tripcode master list (trips created or joined by user)
       const userTripcodes = await getUserTripcodeMaster(userCodeToUse);
       const tripCodeSet = new Set<string>(userTripcodes);
 
-      // ALSO query trip_masters and trips directly by ownerUid if available
       if (currentUid) {
         const ownerMasters = await getTripMastersByOwnerUid(currentUid);
         ownerMasters.forEach(m => {
@@ -380,11 +372,9 @@ export default function App() {
       let updatedTripcodes = Array.from(new Set([...userTripcodes, ...allTripCodes]));
 
       if (allTripCodes.length > 0) {
-        // Fetch all trips in parallel
         const tripPromises = allTripCodes.map(code => getTripFromDB(code));
         const tripsResult = await Promise.all(tripPromises);
         
-        // Fetch trip masters in parallel
         const masterPromises = allTripCodes.map(code => getTripMaster(code));
         const mastersResult = await Promise.all(masterPromises);
         
@@ -396,7 +386,6 @@ export default function App() {
               trip.ownerUid = master.ownerUid;
               trip.allowOthersToModify = master.allowOthersToModify;
             } else {
-              // Fallback for legacy trips
               trip.ownerUid = trip.ownerUid || currentUid || undefined;
               trip.allowOthersToModify = trip.allowOthersToModify !== undefined ? trip.allowOthersToModify : false;
             }
@@ -405,7 +394,6 @@ export default function App() {
         });
       }
 
-      // Merge any local custom trips that are not on the cloud yet
       if (localTripsToMerge) {
         for (const id of Object.keys(localTripsToMerge)) {
           if (!loadedTrips[id]) {
@@ -417,32 +405,36 @@ export default function App() {
             localTrip.code = tripCode;
             localTrip.id = id;
 
-            // Save to trip_master with default allowOthersToModify as false
             await saveTripMaster(tripCode, ownerUid, false);
             localTrip.allowOthersToModify = false;
 
-            // Append to user_tripcode_master
             if (!updatedTripcodes.includes(tripCode)) {
               updatedTripcodes.push(tripCode);
             }
 
-            // Save the trip
             await saveTripToDB(tripCode, localTrip);
             loadedTrips[id] = localTrip;
           }
         }
       }
 
-      // Save user_tripcode_master if updated
       if (JSON.stringify(userTripcodes) !== JSON.stringify(updatedTripcodes)) {
         await saveUserTripcodeMaster(userCodeToUse, updatedTripcodes);
       }
 
-      // Save user config
-      if (!config) {
+      if (config) {
+        syncPreferencesFromConfig(config);
+      } else {
+        const cur = getDefaultCurrency();
+        const temp = (localStorage.getItem('temp-unit') as 'C' | 'F') || 'C';
+        const dist = (localStorage.getItem('distance-unit') as 'km' | 'miles') || 'km';
         await saveUserConfig(userCodeToUse, {
           userCode: userCodeToUse,
-          globalChecklist: config?.globalChecklist || DEFAULT_APP_DATA.globalChecklist
+          globalChecklist: DEFAULT_APP_DATA.globalChecklist,
+          defaultCurrency: cur,
+          temperatureUnit: temp,
+          distanceUnit: dist,
+          updatedAt: Date.now()
         });
       }
 
@@ -458,12 +450,9 @@ export default function App() {
     }
   };
 
-  // Initialize auth state
   useEffect(() => {
     initAuth(
       async (firebaseUser) => {
-        // A sign-in event just arrived — if we had a pending debounced
-        // "sign out" from a transient auth blip, cancel it.
         if (signOutTimeoutRef.current) {
           clearTimeout(signOutTimeoutRef.current);
           signOutTimeoutRef.current = null;
@@ -482,7 +471,6 @@ export default function App() {
               }
             }
             if (details && details.userCode) {
-              // Sync membership tier accurately
               const rawTier = details.subscription_tier || details.userTier;
               const isLife = rawTier === 'lifetime' || (details.sub_end_date?.startsWith('2099') ?? false);
               const subEnd = isLife ? '2099-12-31' : details.sub_end_date;
@@ -498,7 +486,6 @@ export default function App() {
               });
               setUserTier(resolvedTier);
 
-              // Existing or Reactivated User!
               setUser({
                 uid: firebaseUser.uid,
                 displayName: details.name || firebaseUser.displayName,
@@ -510,11 +497,10 @@ export default function App() {
               setAppMode('google-sync');
               await loadCloudData(details.userCode);
             } else {
-              // First time Google user, needs registration form
               setTempGoogleUser(firebaseUser);
               setGoogleUserNeedName(true);
               setAppMode('splash');
-              setSyncStatus('local'); // Ensure we are not stuck in 'syncing' mode on the registration form
+              setSyncStatus('local');
             }
           } catch (err) {
             console.error('Error checking user profile on init:', err);
@@ -527,7 +513,6 @@ export default function App() {
       },
       () => {
         const runSignedOutFlow = async () => {
-          // Check if user previously logged in via Email OTP
           const savedLoginProvider = localStorage.getItem('viadia_login_provider');
           const savedEmailUserStr = localStorage.getItem('viadia_email_user');
 
@@ -557,78 +542,66 @@ export default function App() {
             }
           }
 
-        // Not logged in to Google or Email OTP. Check if they have a guest session.
-        const savedGuest = localStorage.getItem('nomadsync_guest_user');
-        if (savedGuest) {
-          try {
-            const guest = JSON.parse(savedGuest);
-            setGuestUser(guest);
-            setUser({
-              uid: guest.uid,
-              displayName: guest.name,
-              email: null,
-              photoURL: null
-            });
-            setAppMode('local');
-            setSyncStatus('local');
-          } catch (e) {
-            console.error('Failed to parse saved guest user', e);
-            setAppMode('splash');
-            setSyncStatus('local');
-          }
-        } else {
-          setUser(null);
-          setUserCode(null);
-          setSyncStatus('local');
-          setAppMode('splash');
-        }
-
-        // Load local/seed appData
-        const localSaved = localStorage.getItem('viadia_local_data');
-        if (localSaved) {
-          try {
-            const rawParsed = JSON.parse(localSaved);
-            const parsed = migrateAppData(rawParsed);
-            if (parsed && parsed.trips) {
-              const { updatedTrips, hasChanges } = ensureTripsHaveCodes(parsed.trips);
-              const { updatedTrips: statusReconciled, hasChanges: statusChanges } = reconcileTripStatuses(updatedTrips);
-              if (hasChanges || statusChanges) {
-                parsed.trips = statusReconciled;
-                localStorage.setItem('viadia_local_data', JSON.stringify(parsed));
-              } else {
-                parsed.trips = statusReconciled;
-              }
-              setAppData(parsed);
-            } else {
-              setAppData(parsed);
+          const savedGuest = localStorage.getItem('nomadsync_guest_user');
+          if (savedGuest) {
+            try {
+              const guest = JSON.parse(savedGuest);
+              setGuestUser(guest);
+              setUser({
+                uid: guest.uid,
+                displayName: guest.name,
+                email: null,
+                photoURL: null
+              });
+              setAppMode('local');
+              setSyncStatus('local');
+            } catch (e) {
+              console.error('Failed to parse saved guest user', e);
+              setAppMode('splash');
+              setSyncStatus('local');
             }
-          } catch (e) {
-            console.error('Failed to parse local cached state', e);
+          } else {
+            setUser(null);
+            setUserCode(null);
+            setSyncStatus('local');
+            setAppMode('splash');
           }
-        }
-        setIsInitializing(false);
+
+          const localSaved = localStorage.getItem('viadia_local_data');
+          if (localSaved) {
+            try {
+              const rawParsed = JSON.parse(localSaved);
+              const parsed = migrateAppData(rawParsed);
+              if (parsed && parsed.trips) {
+                const { updatedTrips, hasChanges } = ensureTripsHaveCodes(parsed.trips);
+                const { updatedTrips: statusReconciled, hasChanges: statusChanges } = reconcileTripStatuses(updatedTrips);
+                if (hasChanges || statusChanges) {
+                  parsed.trips = statusReconciled;
+                  localStorage.setItem('viadia_local_data', JSON.stringify(parsed));
+                } else {
+                  parsed.trips = statusReconciled;
+                }
+                setAppData(parsed);
+              } else {
+                setAppData(parsed);
+              }
+            } catch (e) {
+              console.error('Failed to parse local cached state', e);
+            }
+          }
+          setIsInitializing(false);
         };
 
         if (userRef.current) {
-          // We already have an authenticated session running in this app
-          // instance. Auth providers can transiently report "signed out"
-          // during token refresh, network reconnects, or the tab regaining
-          // visibility — treating that as a real sign-out immediately used
-          // to flash the whole app to the splash/landing screen (making the
-          // "Hi {name}" greeting look like it randomly vanished). Wait
-          // briefly instead; a follow-up real sign-in event cancels this.
           if (signOutTimeoutRef.current) clearTimeout(signOutTimeoutRef.current);
           signOutTimeoutRef.current = setTimeout(runSignedOutFlow, 700);
         } else {
-          // Nothing signed in yet this session — run immediately so first
-          // load isn't artificially delayed.
           runSignedOutFlow();
         }
       }
     );
   }, []);
 
-  // Sign in trigger with Google
   const handleLogin = async () => {
     try {
       setLoginError(null);
@@ -648,7 +621,6 @@ export default function App() {
             }
           }
           if (details && details.userCode) {
-            // Existing or Reactivated Google User!
             setUser({
               uid: firebaseUser.uid,
               displayName: details.name || firebaseUser.displayName,
@@ -660,11 +632,10 @@ export default function App() {
             setAppMode('google-sync');
             await loadCloudData(details.userCode, appData.trips);
           } else {
-            // First time Google user, needs display name
             setTempGoogleUser(firebaseUser);
             setGoogleUserNeedName(true);
             setAppMode('splash');
-            setSyncStatus('local'); // Reset syncStatus so button is not stuck in "Setting up..." on the registration screen
+            setSyncStatus('local');
           }
         }
       }
@@ -675,7 +646,6 @@ export default function App() {
     }
   };
 
-  // Sign in trigger with Apple
   const handleAppleLogin = async () => {
     try {
       setLoginError(null);
@@ -695,7 +665,6 @@ export default function App() {
           }
         }
         if (details && details.userCode) {
-          // Existing or Reactivated Apple User!
           setUser({
             uid: firebaseUser.uid,
             displayName: details.name || firebaseUser.displayName || 'Apple User',
@@ -707,7 +676,6 @@ export default function App() {
           setAppMode('google-sync');
           await loadCloudData(details.userCode, appData.trips);
         } else {
-          // First time Apple user, needs display name
           setTempGoogleUser({
             ...firebaseUser,
             email: userEmail
@@ -724,13 +692,11 @@ export default function App() {
     }
   };
 
-  // First time Google User registration callback
-  const handleRegisterGoogleName = async (name: string) => {
+  const handleRegisterGoogleName = async (name: string, defaultCurrency?: string) => {
     if (!tempGoogleUser || !tempGoogleUser.email) return;
     try {
       setSyncStatus('syncing');
 
-      // Check if user was previously in deleted_users table to preserve userCode and license
       let reactivated = await reactivateAccountIfDeleted(tempGoogleUser.email, tempGoogleUser.uid);
       let nextCode = reactivated?.userCode || null;
 
@@ -754,7 +720,6 @@ export default function App() {
         };
         await saveUserDetails(tempGoogleUser.uid, details);
       } else {
-        // Updated name if provided
         const rawTier = reactivated?.subscription_tier || reactivated?.userTier;
         const isLife = rawTier === 'lifetime' || (reactivated?.sub_end_date?.startsWith('2099') ?? false);
         const subEnd = isLife ? '2099-12-31' : reactivated?.sub_end_date;
@@ -786,12 +751,26 @@ export default function App() {
       const existingConfig = await getUserConfig(nextCode);
       const existingTripcodes = await getUserTripcodeMaster(nextCode);
 
+      const prefCur = (defaultCurrency || existingConfig?.defaultCurrency || getDefaultCurrency()).toUpperCase();
+      const prefTemp = existingConfig?.temperatureUnit || (localStorage.getItem('temp-unit') as 'C' | 'F') || 'C';
+      const prefDist = existingConfig?.distanceUnit || (localStorage.getItem('distance-unit') as 'km' | 'miles') || 'km';
+
       const initialConfig = {
         userCode: nextCode,
-        globalChecklist: existingConfig?.globalChecklist || DEFAULT_APP_DATA.globalChecklist
+        globalChecklist: existingConfig?.globalChecklist || DEFAULT_APP_DATA.globalChecklist,
+        defaultCurrency: prefCur,
+        temperatureUnit: prefTemp,
+        distanceUnit: prefDist,
+        updatedAt: Date.now()
       };
       await saveUserConfig(nextCode, initialConfig);
       await saveUserTripcodeMaster(nextCode, existingTripcodes || []);
+
+      setUserPreferences({
+        defaultCurrency: prefCur,
+        temperatureUnit: prefTemp,
+        distanceUnit: prefDist
+      }, nextCode);
 
       setUser({
         uid: tempGoogleUser.uid,
@@ -807,15 +786,17 @@ export default function App() {
     } catch (err: any) {
       console.error('Failed to register Google name:', err);
       setLoginError(err?.message || 'Failed to complete registration.');
-      setSyncStatus('local'); // Reset sync status so the loading state gets cleared and user can correct or retry
+      setSyncStatus('local');
     }
   };
 
-  // Guest Continuation callback
-  const handleContinueAsGuest = (name: string) => {
+  const handleContinueAsGuest = (name: string, defaultCurrency?: string) => {
     const guestUid = 'guest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
     const guestObj = { uid: guestUid, name };
     localStorage.setItem('nomadsync_guest_user', JSON.stringify(guestObj));
+    if (defaultCurrency) {
+      setUserPreferences({ defaultCurrency: defaultCurrency.toUpperCase() });
+    }
     setGuestUser(guestObj);
     setUser({
       uid: guestUid,
@@ -827,7 +808,6 @@ export default function App() {
     setSyncStatus('local');
   };
 
-  // Logout trigger
   const handleLogout = async () => {
     await logout();
     try {
@@ -852,7 +832,6 @@ export default function App() {
     setCurrentTab('map');
   };
 
-  // Delete Account trigger
   const handleDeleteAccount = async () => {
     try {
       const uidToDelete = user?.uid || guestUser?.uid || '';
@@ -890,7 +869,6 @@ export default function App() {
     setCurrentTab('map');
   };
 
-  // Modify display name trigger
   const handleUpdateDisplayName = async (newName: string) => {
     if (!user) return;
     const updatedUser = { ...user, displayName: newName };
@@ -910,7 +888,6 @@ export default function App() {
     }
   };
 
-  // Join shared trip code trigger
   const handleJoinTrip = async (code: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const fetchedTrip = await getTripFromDB(code);
@@ -919,7 +896,6 @@ export default function App() {
       }
       fetchedTrip.code = code;
 
-      // Retrieve owner and write permissions from trip_master
       const tripMaster = await getTripMaster(code);
       if (tripMaster) {
         fetchedTrip.ownerUid = tripMaster.ownerUid;
@@ -927,14 +903,12 @@ export default function App() {
       }
       
       if (appMode === 'google-sync' && userCode) {
-        // Append joined trip code to user_tripcode_master if not present
         const currentTripcodes = await getUserTripcodeMaster(userCode);
         if (!currentTripcodes.includes(code)) {
           await saveUserTripcodeMaster(userCode, [...currentTripcodes, code]);
         }
         await loadCloudData(userCode);
       } else {
-        // For guest/local modes
         fetchedTrip.isJoined = true;
         const updatedTrips = { ...appData.trips, [fetchedTrip.id]: fetchedTrip };
         const updatedData = {
@@ -947,7 +921,7 @@ export default function App() {
         setJoinedTripCode(code);
       }
       
-      setCurrentTab('summary'); // Switch to summary tab
+      setCurrentTab('summary');
       return { success: true };
     } catch (err) {
       console.error('Error joining trip:', err);
@@ -955,13 +929,11 @@ export default function App() {
     }
   };
 
-  // Exit joined trip session
   const handleExitJoinedTrip = () => {
     setActiveTripId(null);
     setJoinedTripCode(null);
     setAppMode(guestUser ? 'local' : 'splash');
     
-    // Restore from localStorage if any, otherwise fallback to DEFAULT_APP_DATA
     const localSaved = localStorage.getItem('viadia_local_data');
     if (localSaved) {
       try {
@@ -978,12 +950,10 @@ export default function App() {
     setAppData(DEFAULT_APP_DATA);
   };
 
-  // Save changes helper
   const handleUpdateAppData = async (newData: AppData) => {
     const oldTrips = appData.trips;
     const newTrips = newData.trips;
 
-    // Check if any existing trip was modified without write permission (synchronous check)
     let hasForbiddenModification = false;
     let forbiddenTripTitle = '';
     let forbiddenTripOwner = '';
@@ -1038,7 +1008,6 @@ export default function App() {
     }
 
     localStorage.setItem('viadia_local_data', JSON.stringify(newData));
-
     setAppData(newData);
 
     if (appMode === 'google-sync' && userCode) {
@@ -1046,7 +1015,6 @@ export default function App() {
       try {
         const globalChecklistChanged = JSON.stringify(appData.globalChecklist) !== JSON.stringify(newData.globalChecklist);
 
-        // Added/Modified trips
         for (const id of Object.keys(newTrips)) {
           const newTrip = { ...newTrips[id] };
           const oldTrip = oldTrips[id];
@@ -1066,20 +1034,16 @@ export default function App() {
             const ownerUid = newTrip.ownerUid || oldTrip?.ownerUid || auth.currentUser?.uid || user?.uid || auth.currentUser?.email || user?.email || userCode || '';
             newTrip.ownerUid = ownerUid;
 
-            // Create or update trip_master
             if (!oldTrip) {
-              // Brand new trip created: owner is current logged in user. Default allowOthersToModify is false.
               await saveTripMaster(tripCode, ownerUid, false);
               newTrip.allowOthersToModify = false;
 
-              // Append new trip to user_tripcode_master
               const currentTripcodes = await getUserTripcodeMaster(userCode);
               if (!currentTripcodes.includes(tripCode)) {
                 const updatedTripcodes = [...currentTripcodes, tripCode];
                 await saveUserTripcodeMaster(userCode, updatedTripcodes);
               }
             } else {
-              // Existing trip being modified. Check if allowOthersToModify changed
               const hasFlagChanged = newTrip.allowOthersToModify !== oldTrip?.allowOthersToModify;
               if (hasFlagChanged && newTrip.allowOthersToModify !== undefined) {
                 const tripMaster = await getTripMaster(tripCode);
@@ -1088,28 +1052,20 @@ export default function App() {
               }
             }
 
-            // Save the trip to the trips table
             await saveTripToDB(tripCode, newTrip);
           }
         }
 
-        // Deleted trips
         for (const id of Object.keys(oldTrips)) {
           if (!newTrips[id]) {
             const deletedTrip = oldTrips[id];
             if (deletedTrip.code) {
-              // Remove the tripcode from user_tripcode_master
               const currentTripcodes = await getUserTripcodeMaster(userCode);
               const updatedTripcodes = currentTripcodes.filter(c => c !== deletedTrip.code);
               await saveUserTripcodeMaster(userCode, updatedTripcodes);
 
-              // Delete the trip master entry
               await deleteTripMaster(deletedTrip.code);
-
-              // Delete the trip_gclist_styling entry
               await deleteTripGclistStyling(deletedTrip.code);
-
-              // Delete from the trips table
               await deleteTripFromDB(deletedTrip.code);
             }
           }
@@ -1127,7 +1083,6 @@ export default function App() {
         setSyncStatus('error');
       }
     } else {
-      // Guest / Local mode: sync joined trips to DB if modified, keep locally created trips local
       setSyncStatus('syncing');
       try {
         for (const id of Object.keys(newTrips)) {
@@ -1151,7 +1106,6 @@ export default function App() {
     }
   };
 
-  // Individual callbacks for components
   const handleUpdateTrips = (updatedTrips: { [id: string]: Trip }) => {
     handleUpdateAppData({
       ...appData,
@@ -1166,15 +1120,6 @@ export default function App() {
     });
   };
 
-  // Sync button override trigger
-  const handleManualSync = async () => {
-    if (appMode === 'google-sync' && userCode) {
-      await loadCloudData(userCode);
-    } else {
-      setShowAuthModal(true);
-    }
-  };
-
   const [sharingTripId, setSharingTripId] = useState<string | null>(null);
   const [shareToast, setShareToast] = useState<string | null>(null);
 
@@ -1187,7 +1132,6 @@ export default function App() {
     
     try {
       if (!codeToShare) {
-        // Register the trip on the server to get a real 6-char trip code
         try {
           const response = await fetch('/api/trips', {
             method: 'POST',
@@ -1203,14 +1147,12 @@ export default function App() {
             codeToShare = data.code;
             setJoinedTripCode(data.code);
             
-            // Save the newly generated code back to this trip in local state
             const updatedTrips = { ...appData.trips };
             if (updatedTrips[activeTrip.id]) {
               updatedTrips[activeTrip.id] = { ...updatedTrips[activeTrip.id], code: data.code };
             }
             handleUpdateTrips(updatedTrips);
           } else {
-            // Fallback: generate a local 6-char code
             codeToShare = activeTrip.id.substring(0, 6).toUpperCase();
           }
         } catch (fetchErr) {
@@ -1218,7 +1160,6 @@ export default function App() {
           codeToShare = activeTrip.id.substring(0, 6).toUpperCase();
         }
       } else {
-        // If we already have a code, let's register/update it on the server anyway to make sure others can join it
         try {
           await fetch('/api/trips', {
             method: 'POST',
@@ -1343,8 +1284,6 @@ export default function App() {
     );
   }
 
-
-
   const getVisibleTrips = (): { [id: string]: Trip } => {
     if (appMode === 'joined-trip' && joinedTripCode) {
       const tripsArray = Object.values(appData.trips) as Trip[];
@@ -1359,29 +1298,30 @@ export default function App() {
   const visibleTrips = getVisibleTrips();
   const activeTrip = activeTripIdToUse ? visibleTrips[activeTripIdToUse] : null;
 
-  const safeTopPadding = windowWidth < 640 ? 32 : 0;
-  const headerExpandedHeight = windowWidth >= 768 ? 228 : (windowWidth >= 640 ? 200 : 190);
-  const collapsedHeaderHeight = windowWidth >= 640 ? 58 : 84;
+  // Safe area top spacing below camera notch / status bar
+  const safeTopPadding = windowWidth < 640 ? 36 : 14;
+  const headerExpandedHeight = windowWidth >= 768 ? 236 : (windowWidth >= 640 ? 210 : 204);
+  const collapsedHeaderHeight = safeTopPadding + 52;
   const maxScrollHeight = headerExpandedHeight - collapsedHeaderHeight;
   const progress = maxScrollHeight > 0 ? Math.min(1, Math.max(0, scrollY / maxScrollHeight)) : 1;
 
-  // Cropped header height and constant 12px curve radius
   const currentHeaderHeight = Math.max(collapsedHeaderHeight, headerExpandedHeight - scrollY);
   const curveRadius = 12;
 
-  // Dynamically position the title and date subtitle below camera cutout
-  const expandedTitleTop = windowWidth >= 768 ? 82 : (windowWidth >= 640 ? 76 : 82);
+  // Expanded vs Collapsed positioning
+  const expandedTitleTop = safeTopPadding + (windowWidth >= 768 ? 58 : 50);
   const expandedDateTop = expandedTitleTop + 36;
-
-  // When progress = 1 (collapsed), aligns with the back button below camera cutout
-  const collapsedTitleTop = windowWidth >= 640 ? 11 : 40;
+  const collapsedTitleTop = safeTopPadding + 6;
   const currentTitleTop = expandedTitleTop - (expandedTitleTop - collapsedTitleTop) * progress;
 
-  // Calculate maximum visual width dynamically to allow the title to grow as long as possible before truncating with three dots
+  // Horizontal translation so title animates right next to the Back Button when collapsed
+  const titleLeftMargin = windowWidth >= 1024 ? 32 : (windowWidth >= 640 ? 24 : 16);
+  const titleLeftShift = progress * 48;
+
+  // Dynamic max width calculation: accounts for back button (48px) and share button (48px) when collapsed
   const containerWidth = Math.min(windowWidth, 1280);
-  const titleMargin = windowWidth >= 1024 ? 32 : (windowWidth >= 640 ? 24 : 16);
-  const expandedMaxW = containerWidth - titleMargin * 2;
-  const collapsedMaxW = containerWidth - titleMargin * 2 - 92;
+  const expandedMaxW = containerWidth - titleLeftMargin * 2;
+  const collapsedMaxW = containerWidth - titleLeftMargin * 2 - 96;
   const currentMaxW = expandedMaxW - (expandedMaxW - collapsedMaxW) * progress;
   const titleScale = 1 - progress * 0.22;
   const titleMaxWidth = currentMaxW / titleScale;
@@ -1392,7 +1332,6 @@ export default function App() {
       {/* 1. TOP NAV BAR & BANNER FOR ACTIVE WORKSPACES */}
       {activeTripIdToUse && (
         <>
-          {/* Dynamic Background Image Banner with Curved Bottom Corners and Strong Shadow */}
           <div 
             style={{ 
               height: `${currentHeaderHeight}px`,
@@ -1410,55 +1349,53 @@ export default function App() {
               }}
               referrerPolicy="no-referrer"
             />
-            {/* Soft dark gradient overlay for typographic legibility */}
             <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/25 to-black/65 pointer-events-none" />
           </div>
 
-          {/* Fixed Controls Layer on Top (Back button, Title, Date, and Share button) */}
           <div 
             style={{ height: `${currentHeaderHeight}px` }}
             className="fixed top-0 left-0 right-0 z-40 max-w-7xl mx-auto pointer-events-none select-none"
           >
-            {/* Back Button Container */}
+            {/* Top row: Back button (aligned on the left) */}
             <div 
               style={{ top: `${safeTopPadding}px` }}
-              className="absolute left-0 h-14 px-4 sm:px-6 lg:px-8 flex items-center"
+              className="absolute left-0 h-12 px-3 sm:px-6 lg:px-8 flex items-center"
             >
               <button
                 onClick={() => handleSetActiveTripId(null)}
-                className="pointer-events-auto p-1.5 text-white hover:text-indigo-300 transition-colors duration-150 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95 shrink-0"
+                className="pointer-events-auto h-9 w-9 p-1.5 text-white hover:text-indigo-300 transition-colors duration-150 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95 shrink-0 rounded-full bg-black/20 backdrop-blur-xs"
                 title="Back to Home Map"
               >
-                <ArrowLeft className="h-6 w-6" />
+                <ArrowLeft className="h-5 w-5" />
               </button>
             </div>
 
-            {/* Share Button Container (Right aligned) */}
+            {/* Top row: Share button (aligned on the right) */}
             <div 
               style={{ top: `${safeTopPadding}px` }}
-              className="absolute right-0 h-14 px-4 sm:px-6 lg:px-8 flex items-center"
+              className="absolute right-0 h-12 px-3 sm:px-6 lg:px-8 flex items-center"
             >
               <button
                 onClick={handleShareTrip}
                 disabled={sharingTripId !== null}
-                className="pointer-events-auto p-1.5 text-white hover:text-indigo-300 transition-colors duration-150 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95 shrink-0 disabled:opacity-50"
+                className="pointer-events-auto h-9 w-9 p-1.5 text-white hover:text-indigo-300 transition-colors duration-150 cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95 shrink-0 rounded-full bg-black/20 backdrop-blur-xs disabled:opacity-50"
                 title="Share Trip Invite"
               >
                 {sharingTripId ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <Share2 className="h-5 w-5" />
+                  <Share2 className="h-4 w-4" />
                 )}
               </button>
             </div>
 
-            {/* Title Text Layer with animated translation and scaling */}
+            {/* Title Text Layer */}
             <div
               style={{
                 position: 'absolute',
                 top: 0,
-                left: windowWidth >= 1024 ? '32px' : (windowWidth >= 640 ? '24px' : '16px'),
-                transform: `translate(${progress * 44}px, ${currentTitleTop}px) scale(${titleScale})`,
+                left: `${titleLeftMargin}px`,
+                transform: `translate(${titleLeftShift}px, ${currentTitleTop}px) scale(${titleScale})`,
                 transformOrigin: 'left center',
                 height: '36px',
                 display: 'flex',
@@ -1470,13 +1407,13 @@ export default function App() {
               <span className="truncate block w-full">{activeTrip?.title}</span>
             </div>
 
-            {/* Date Subtitle Layer with vertical displacement and rapid fading */}
+            {/* Date Subtitle Layer */}
             {activeTrip?.startDate && (
               <div
                 style={{
                   position: 'absolute',
                   top: `${expandedDateTop}px`,
-                  left: windowWidth >= 1024 ? '32px' : (windowWidth >= 640 ? '24px' : '16px'),
+                  left: `${titleLeftMargin}px`,
                   opacity: Math.max(0, 1 - progress * 2.5),
                   transform: `translateY(${-scrollY * 0.4}px)`,
                 }}
@@ -1506,7 +1443,7 @@ export default function App() {
 
       {/* 3. HOME SCREEN HERO VIDEO BACKDROP & PROFILE BAR */}
       {!activeTripIdToUse && (
-        <div className="relative w-full h-[220px] sm:h-[280px] md:h-[340px] lg:h-[380px] bg-slate-900 overflow-hidden select-none">
+        <div className="relative w-full h-[250px] sm:h-[290px] md:h-[340px] lg:h-[380px] bg-slate-900 overflow-hidden select-none">
           {!heroVideoError ? (
             <video
               ref={heroVideoRef}
@@ -1533,7 +1470,10 @@ export default function App() {
           <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/10 to-black/85" />
 
           <div className="absolute inset-0 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col justify-between py-5 z-30">
-            <div ref={quickMenuContainerRef} className="absolute top-[max(env(safe-area-inset-top,0px)+0.75rem,2.25rem)] sm:top-6 left-4 sm:left-6 lg:left-8 z-30 pointer-events-none">
+            <div 
+              ref={quickMenuContainerRef} 
+              className="absolute top-[max(env(safe-area-inset-top,0px)+1rem,2.75rem)] sm:top-6 left-4 sm:left-6 lg:left-8 z-30 pointer-events-none"
+            >
               <div className="relative pointer-events-auto">
                 <button
                   ref={quickMenuButtonRef}
@@ -1565,12 +1505,10 @@ export default function App() {
                   <ChevronDown className={`h-4 w-4 text-white/80 shrink-0 transition-transform duration-300 ${showQuickMenu ? 'rotate-180' : ''}`} />
                 </button>
 
-                {/* Quick Access Dropdown — portaled to document.body so the hero's overflow-hidden can't clip it */}
                 {createPortal(
                   <AnimatePresence>
                     {showQuickMenu && quickMenuPosition && (
                       <React.Fragment key="quick-menu-portal">
-                        {/* Dimming scrim behind the dropdown; also closes the menu on click */}
                         <motion.div
                           initial={{ opacity: 0 }}
                           animate={{ opacity: 1 }}
@@ -1594,157 +1532,151 @@ export default function App() {
                             left: quickMenuPosition.left,
                             width: quickMenuPosition.width,
                           }}
-                        className={`w-72 rounded-3xl border shadow-2xl overflow-hidden origin-top-left backdrop-blur-xl z-[200] ${
-                          theme === 'dark' ? 'bg-slate-900/85 border-white/10' : 'bg-white/85 border-slate-200'
-                        }`}
-                      >
-                        <div className="p-2">
-                        {/* Global Checklist */}
-                        <motion.button
-                          whileHover={{ x: 3 }}
-                          whileTap={{ scale: 0.97 }}
-                          onClick={() => {
-                            setShowQuickGlobalChecklist(true);
-                            setShowQuickMenu(false);
-                            setShowAccentPicker(false);
-                          }}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
-                            theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
+                          className={`w-72 rounded-3xl border shadow-2xl overflow-hidden origin-top-left backdrop-blur-xl z-[200] ${
+                            theme === 'dark' ? 'bg-slate-900/85 border-white/10' : 'bg-white/85 border-slate-200'
                           }`}
                         >
-                          <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
-                            theme === 'dark' ? 'bg-indigo-400/25 text-indigo-200' : 'bg-indigo-100 text-indigo-600'
-                          }`}>
-                            <CheckSquare className="h-[18px] w-[18px]" />
-                          </span>
-                          <span>Global Checklist</span>
-                        </motion.button>
+                          <div className="p-2">
+                            <motion.button
+                              whileHover={{ x: 3 }}
+                              whileTap={{ scale: 0.97 }}
+                              onClick={() => {
+                                setShowQuickGlobalChecklist(true);
+                                setShowQuickMenu(false);
+                                setShowAccentPicker(false);
+                              }}
+                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
+                                theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                theme === 'dark' ? 'bg-indigo-400/25 text-indigo-200' : 'bg-indigo-100 text-indigo-600'
+                              }`}>
+                                <CheckSquare className="h-[18px] w-[18px]" />
+                              </span>
+                              <span>Global Checklist</span>
+                            </motion.button>
 
-                        {/* Theme */}
-                        <motion.button
-                          whileHover={{ x: 3 }}
-                          whileTap={{ scale: 0.97 }}
-                          onClick={() => {
-                            handleToggleTheme();
-                          }}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
-                            theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
-                          }`}
-                        >
-                          <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
-                            theme === 'dark' ? 'bg-amber-400/25 text-amber-200' : 'bg-amber-100 text-amber-600'
-                          }`}>
-                            {theme === 'light' ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
-                          </span>
-                          <span className="flex-1">Theme</span>
-                          <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full ${
-                            theme === 'dark' ? 'bg-white/15 text-white/90' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {theme === 'light' ? 'Light' : 'Dark'}
-                          </span>
-                        </motion.button>
+                            <motion.button
+                              whileHover={{ x: 3 }}
+                              whileTap={{ scale: 0.97 }}
+                              onClick={() => {
+                                handleToggleTheme();
+                              }}
+                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
+                                theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                theme === 'dark' ? 'bg-amber-400/25 text-amber-200' : 'bg-amber-100 text-amber-600'
+                              }`}>
+                                {theme === 'light' ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
+                              </span>
+                              <span className="flex-1">Theme</span>
+                              <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-1 rounded-full ${
+                                theme === 'dark' ? 'bg-white/15 text-white/90' : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {theme === 'light' ? 'Light' : 'Dark'}
+                              </span>
+                            </motion.button>
 
-                        {/* Accent Color (expands inline swatch picker) */}
-                        <div>
-                          <motion.button
-                            whileHover={{ x: 3 }}
-                            whileTap={{ scale: 0.97 }}
-                            onClick={() => setShowAccentPicker((prev) => !prev)}
-                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
-                              theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
-                            }`}
-                          >
-                            <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
-                              theme === 'dark' ? 'bg-fuchsia-400/25 text-fuchsia-200' : 'bg-fuchsia-100 text-fuchsia-600'
-                            }`}>
-                              <Palette className="h-[18px] w-[18px]" />
-                            </span>
-                            <span className="flex-1">Accent Color</span>
-                            <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform duration-300 ${showAccentPicker ? 'rotate-180' : ''} ${
-                              theme === 'dark' ? 'text-white/70' : 'text-slate-400'
-                            }`} />
-                          </motion.button>
-
-                          <AnimatePresence>
-                            {showAccentPicker && (
-                              <motion.div
-                                initial={{ height: 0, opacity: 0 }}
-                                animate={{ height: 'auto', opacity: 1 }}
-                                exit={{ height: 0, opacity: 0 }}
-                                transition={{ duration: 0.22, ease: 'easeInOut' }}
-                                className="overflow-hidden"
+                            <div>
+                              <motion.button
+                                whileHover={{ x: 3 }}
+                                whileTap={{ scale: 0.97 }}
+                                onClick={() => setShowAccentPicker((prev) => !prev)}
+                                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
+                                  theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
+                                }`}
                               >
-                                {/* Wraps to a second row automatically if the (mobile-matched) pill width is too narrow to fit all swatches in one line */}
-                                <div className="flex flex-wrap gap-2 px-3 pt-1 pb-2.5">
-                                  {ACCENT_COLORS.map((c, cIdx) => {
-                                    const isSelected = colorTheme === c.id;
-                                    return (
-                                      <motion.button
-                                        key={`accent-theme-${c.id}-${cIdx}`}
-                                        whileHover={{ scale: 1.15, rotate: -6 }}
-                                        whileTap={{ scale: 0.9 }}
-                                        onClick={() => setColorTheme(c.id)}
-                                        title={c.name}
-                                        className={`h-7 w-7 rounded-full border-2 flex items-center justify-center transition-shadow cursor-pointer ${
-                                          isSelected ? (theme === 'dark' ? 'border-white shadow-lg' : 'border-slate-800 shadow-lg') : (theme === 'dark' ? 'border-white/30' : 'border-slate-300')
-                                        }`}
-                                        style={{ backgroundColor: c.hex }}
-                                      >
-                                        {isSelected && <Check className="h-3.5 w-3.5 text-white" />}
-                                      </motion.button>
-                                    );
-                                  })}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
+                                <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                  theme === 'dark' ? 'bg-fuchsia-400/25 text-fuchsia-200' : 'bg-fuchsia-100 text-fuchsia-600'
+                                }`}>
+                                  <Palette className="h-[18px] w-[18px]" />
+                                </span>
+                                <span className="flex-1">Accent Color</span>
+                                <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform duration-300 ${showAccentPicker ? 'rotate-180' : ''} ${
+                                  theme === 'dark' ? 'text-white/70' : 'text-slate-400'
+                                }`} />
+                              </motion.button>
 
-                        <div className={`my-1 border-t ${theme === 'dark' ? 'border-white/15' : 'border-slate-200'}`} />
+                              <AnimatePresence>
+                                {showAccentPicker && (
+                                  <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.22, ease: 'easeInOut' }}
+                                    className="overflow-hidden"
+                                  >
+                                    <div className="flex flex-wrap gap-2 px-3 pt-1 pb-2.5">
+                                      {ACCENT_COLORS.map((c, cIdx) => {
+                                        const isSelected = colorTheme === c.id;
+                                        return (
+                                          <motion.button
+                                            key={`accent-theme-${c.id}-${cIdx}`}
+                                            whileHover={{ scale: 1.15, rotate: -6 }}
+                                            whileTap={{ scale: 0.9 }}
+                                            onClick={() => setColorTheme(c.id)}
+                                            title={c.name}
+                                            className={`h-7 w-7 rounded-full border-2 flex items-center justify-center transition-shadow cursor-pointer ${
+                                              isSelected ? (theme === 'dark' ? 'border-white shadow-lg' : 'border-slate-800 shadow-lg') : (theme === 'dark' ? 'border-white/30' : 'border-slate-300')
+                                            }`}
+                                            style={{ backgroundColor: c.hex }}
+                                          >
+                                            {isSelected && <Check className="h-3.5 w-3.5 text-white" />}
+                                          </motion.button>
+                                        );
+                                      })}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
 
-                        {/* Full Settings */}
-                        <motion.button
-                          whileHover={{ x: 3 }}
-                          whileTap={{ scale: 0.97 }}
-                          onClick={() => {
-                            setShowGlobalSettings(true);
-                            setShowQuickMenu(false);
-                            setShowAccentPicker(false);
-                          }}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
-                            theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
-                          }`}
-                        >
-                          <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
-                            theme === 'dark' ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            <Settings className="h-[18px] w-[18px]" />
-                          </span>
-                          <span>Settings</span>
-                        </motion.button>
+                            <div className={`my-1 border-t ${theme === 'dark' ? 'border-white/15' : 'border-slate-200'}`} />
 
-                        {/* Logout */}
-                        <motion.button
-                          whileHover={{ x: 3 }}
-                          whileTap={{ scale: 0.97 }}
-                          onClick={() => {
-                            setShowQuickMenu(false);
-                            setShowAccentPicker(false);
-                            setShowLogoutConfirmModal(true);
-                          }}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
-                            theme === 'dark' ? 'text-rose-300 hover:bg-rose-500/15' : 'text-rose-600 hover:bg-rose-50'
-                          }`}
-                        >
-                          <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
-                            theme === 'dark' ? 'bg-rose-400/25 text-rose-300' : 'bg-rose-100 text-rose-600'
-                          }`}>
-                            <LogOut className="h-[18px] w-[18px]" />
-                          </span>
-                          <span>Log Out</span>
-                        </motion.button>
-                        </div>
-                      </motion.div>
+                            <motion.button
+                              whileHover={{ x: 3 }}
+                              whileTap={{ scale: 0.97 }}
+                              onClick={() => {
+                                setShowGlobalSettings(true);
+                                setShowQuickMenu(false);
+                                setShowAccentPicker(false);
+                              }}
+                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
+                                theme === 'dark' ? 'text-white hover:bg-white/10' : 'text-slate-800 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                theme === 'dark' ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                <Settings className="h-[18px] w-[18px]" />
+                              </span>
+                              <span>Settings</span>
+                            </motion.button>
+
+                            <motion.button
+                              whileHover={{ x: 3 }}
+                              whileTap={{ scale: 0.97 }}
+                              onClick={() => {
+                                setShowQuickMenu(false);
+                                setShowAccentPicker(false);
+                                setShowLogoutConfirmModal(true);
+                              }}
+                              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl text-left text-sm font-bold transition-colors cursor-pointer ${
+                                theme === 'dark' ? 'text-rose-300 hover:bg-rose-500/15' : 'text-rose-600 hover:bg-rose-50'
+                              }`}
+                            >
+                              <span className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+                                theme === 'dark' ? 'bg-rose-400/25 text-rose-300' : 'bg-rose-100 text-rose-600'
+                              }`}>
+                                <LogOut className="h-[18px] w-[18px]" />
+                              </span>
+                              <span>Log Out</span>
+                            </motion.button>
+                          </div>
+                        </motion.div>
                       </React.Fragment>
                     )}
                   </AnimatePresence>,
@@ -1758,7 +1690,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 4. MAIN PAGE & WORKSPACE LAYOUT (Page starts behind image curve and scrolls underneath image header) */}
+      {/* 4. MAIN PAGE & WORKSPACE LAYOUT */}
       <AnimatePresence mode="wait">
         {activeTripIdToUse ? (
           <motion.div 
@@ -1780,10 +1712,8 @@ export default function App() {
               showQuickMenu ? 'overflow-hidden' : 'overflow-y-auto'
             }`}
           >
-            {/* Spacer: page starts behind where image curved bottom begins */}
             <div style={{ height: `${headerExpandedHeight - 12}px` }} className="w-full pointer-events-none select-none" />
             
-            {/* Main workspace page content container */}
             <div className="bg-slate-50 dark:bg-slate-950 relative z-20 transition-colors duration-300 min-h-full">
               <main className="w-full max-w-7xl mx-auto px-2 sm:px-4 md:px-6 pb-28 pt-11">
                 {shareToast && (
@@ -1930,7 +1860,6 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-
 
       {/* Auth Prompt Modal */}
       {showAuthModal && (
@@ -2100,7 +2029,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Quick Access: Global Checklist Modal (opened directly from the profile pill dropdown) */}
+      {/* Quick Access: Global Checklist Modal */}
       <GlobalChecklistModal
         isOpen={showQuickGlobalChecklist}
         onClose={() => setShowQuickGlobalChecklist(false)}

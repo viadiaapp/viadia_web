@@ -5,7 +5,7 @@ import {
   Cloud, ArrowLeft, Check, LogOut, Briefcase, Receipt, Award, 
   Users, Headphones, Star, Share2, Info, ArrowRight, Settings, Chrome,
   Loader2, UserX, Heart, FileText, ChevronRight, AlertTriangle, X, HelpCircle,
-  Edit2, User, Mail, MessageSquare, Send, Code2, CheckSquare, Smartphone, Globe
+  Edit2, User, Mail, MessageSquare, Send, Code2, CheckSquare, Smartphone, Globe, Coins, ChevronDown
 } from 'lucide-react';
 import { AppData, ColorTheme, ChecklistItem, Trip, SubscriptionTransaction } from '../types';
 import { getFormattedPrice } from '../config/pricingConfig';
@@ -14,6 +14,10 @@ import { SUPPORT_EMAIL } from '../config/appConfig';
 import { ViadiaWordmark } from './BrandComponents';
 import OpenSourceLicensesModal from './OpenSourceLicensesModal';
 import GlobalChecklistModal from './GlobalChecklistModal';
+import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
+import { SelectionBottomSheet, SelectOption } from './SelectionBottomSheet';
+import { getDefaultCurrency, setUserPreferences, PREF_EVENTS } from '../lib/userPreferences';
+import { staticCurrenciesSeed } from '../data/staticCurrencies';
 import { getStoredPlatform, setStoredPlatform, TargetPlatform } from '../lib/platform';
 import {
   exportSanitizedAppData,
@@ -54,6 +58,45 @@ interface GlobalSettingsScreenProps {
   onUpdateGlobalChecklist?: (updatedChecklist: ChecklistItem[]) => void;
   onUpdateTrips?: (updatedTrips: { [id: string]: Trip }) => void;
 }
+
+const CURRENCY_FLAG_MAP = new Map<string, string>();
+const PRIORITY_CURRENCY_FLAGS: { [code: string]: string } = {
+  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', INR: '🇮🇳', AUD: '🇦🇺', CAD: '🇨🇦',
+  JPY: '🇯🇵', CNY: '🇨🇳', CHF: '🇨🇭', NZD: '🇳🇿', SGD: '🇸🇬', HKD: '🇭🇰',
+  SEK: '🇸🇪', KRW: '🇰🇷', NOK: '🇳🇴', MXN: '🇲🇽', BRL: '🇧🇷', ZAR: '🇿🇦',
+  AED: '🇦🇪', THB: '🇹🇭',
+};
+
+staticCurrenciesSeed.forEach((c) => {
+  if (c.currencyCode && c.flagEmoji) {
+    const code = c.currencyCode.toUpperCase();
+    if (!CURRENCY_FLAG_MAP.has(code)) {
+      CURRENCY_FLAG_MAP.set(code, c.flagEmoji);
+    }
+  }
+});
+
+Object.entries(PRIORITY_CURRENCY_FLAGS).forEach(([code, flag]) => {
+  CURRENCY_FLAG_MAP.set(code, flag);
+});
+
+const getCurrencyFlagAndInfo = (code: string) => {
+  const upper = code.toUpperCase();
+  const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === upper);
+  return {
+    code: upper,
+    name: match?.currencyName || upper,
+    symbol: match?.currencySymbol || '$',
+    flag: CURRENCY_FLAG_MAP.get(upper) || match?.flagEmoji || '🌐',
+  };
+};
+
+const CONTACT_TOPIC_OPTIONS: SelectOption[] = [
+  { value: 'support', label: 'General Support / Question', icon: '💬' },
+  { value: 'feature', label: 'Feature Request / Idea', icon: '💡' },
+  { value: 'bug', label: 'Report a Bug / Issue', icon: '🐞' },
+  { value: 'other', label: 'Other Inquiries', icon: '📝' },
+];
 
 export default function GlobalSettingsScreen({
   onClose,
@@ -99,9 +142,10 @@ export default function GlobalSettingsScreen({
   const [userTransactions, setUserTransactions] = useState<SubscriptionTransaction[]>([]);
   const [showTransactionHistory, setShowTransactionHistory] = useState(false);
 
+  const [isTopicPickerOpen, setIsTopicPickerOpen] = useState(false);
+
   const userCode = user?.userCode || localStorage.getItem('viadia_user_code') || '';
 
-  // Subscribe to tier and subscription changes and load transaction history
   useEffect(() => {
     const unsub = subscribeToTierChange(() => {
       setSubUpdateTrigger((v) => v + 1);
@@ -117,21 +161,41 @@ export default function GlobalSettingsScreen({
     }
   }, [userCode, subUpdateTrigger]);
 
-  // App Preferences Units
   const [tempUnit, setTempUnit] = useState<'C' | 'F'>(
     () => (localStorage.getItem('temp-unit') as 'C' | 'F') || 'C'
   );
   const [distanceUnit, setDistanceUnit] = useState<'km' | 'miles'>(
     () => (localStorage.getItem('distance-unit') as 'km' | 'miles') || 'km'
   );
+  const [defaultCurrency, setDefaultCurrency] = useState<string>(
+    () => getDefaultCurrency()
+  );
+  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
 
-  // Sub-modal back handlers
+  useEffect(() => {
+    const handlePrefChange = () => {
+      const storedCur = getDefaultCurrency();
+      setDefaultCurrency(storedCur);
+      const storedTemp = (localStorage.getItem('temp-unit') as 'C' | 'F') || 'C';
+      setTempUnit(storedTemp);
+      const storedDist = (localStorage.getItem('distance-unit') as 'km' | 'miles') || 'km';
+      setDistanceUnit(storedDist);
+    };
+
+    window.addEventListener(PREF_EVENTS.PREFERENCES_CHANGED, handlePrefChange);
+    window.addEventListener('storage', handlePrefChange);
+    return () => {
+      window.removeEventListener(PREF_EVENTS.PREFERENCES_CHANGED, handlePrefChange);
+      window.removeEventListener('storage', handlePrefChange);
+    };
+  }, []);
+
   useBackButton('gs-logout-confirm', showLogoutConfirm, () => setShowLogoutConfirm(false), 110);
   useBackButton('gs-delete-confirm', showDeleteConfirm, () => setShowDeleteConfirm(false), 110);
   useBackButton('gs-about-modal', showAboutModal, () => setShowAboutModal(false), 110);
   useBackButton('gs-licenses-modal', showLicensesModal, () => setShowLicensesModal(false), 110);
   useBackButton('gs-terms-modal', showTermsModal, () => setShowTermsModal(false), 110);
-  useBackButton('gs-contact-modal', showContactModal, () => setShowContactModal(false), 110);
+  useBackButton('gs-contact-modal', showContactModal && !isTopicPickerOpen, () => setShowContactModal(false), 110);
   useBackButton('gs-global-checklist-modal', showGlobalChecklistModal, () => setShowGlobalChecklistModal(false), 110);
   useBackButton('gs-transaction-history', showTransactionHistory, () => setShowTransactionHistory(false), 110);
   useBackButton('gs-prepared-import', preparedImport !== null, () => setPreparedImport(null), 110);
@@ -139,13 +203,19 @@ export default function GlobalSettingsScreen({
   const handleToggleTempUnit = (unit: 'C' | 'F') => {
     setTempUnit(unit);
     localStorage.setItem('temp-unit', unit);
-    window.dispatchEvent(new Event('storage'));
+    setUserPreferences({ temperatureUnit: unit }, userCode);
   };
 
   const handleToggleDistanceUnit = (unit: 'km' | 'miles') => {
     setDistanceUnit(unit);
     localStorage.setItem('distance-unit', unit);
-    window.dispatchEvent(new Event('storage'));
+    setUserPreferences({ distanceUnit: unit }, userCode);
+  };
+
+  const handleSelectCurrency = (currencyCode: string) => {
+    const code = currencyCode.toUpperCase();
+    setDefaultCurrency(code);
+    setUserPreferences({ defaultCurrency: code }, userCode);
   };
 
   const handleContactSubmit = async (e: React.FormEvent) => {
@@ -212,12 +282,10 @@ export default function GlobalSettingsScreen({
     }
   };
 
-  // Export App Data
   const handleExport = () => {
     exportSanitizedAppData(appData, user);
   };
 
-  // Handle file select, parse, and validate
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setImportError(null);
     setImportSuccess(false);
@@ -270,7 +338,6 @@ export default function GlobalSettingsScreen({
     });
   };
 
-  // Perform the import execution (appending new trips, applying choices)
   const confirmImport = async () => {
     if (!preparedImport) return;
     setIsExecutingImport(true);
@@ -293,24 +360,6 @@ export default function GlobalSettingsScreen({
     }
   };
 
-  const handleShareInvite = async () => {
-    const success = await copyToClipboard('https://viadia.app/invite/gold-club-vip');
-    if (success) {
-      setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 2000);
-    }
-  };
-
-  // Get current accent border & text styles based on theme
-  const getAccentClass = () => {
-    switch (colorTheme) {
-      case 'emerald': return 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-500';
-      case 'amber': return 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/20 border-amber-500';
-      case 'rose': return 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/20 border-rose-500';
-      default: return 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/20 border-indigo-500';
-    }
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-300 font-sans">
       {/* TOP HEADER */}
@@ -328,14 +377,12 @@ export default function GlobalSettingsScreen({
             Profile & Settings
           </h2>
 
-          <div className="w-8 h-8" /> {/* Spacer */}
+          <div className="w-8 h-8" />
         </div>
       </header>
 
-      {/* SETTINGS CONTENT (MATCHING TRIP SETTINGS DUAL COLUMN STYLE) */}
+      {/* SETTINGS CONTENT */}
       <main className="w-full max-w-7xl mx-auto px-2 sm:px-4 md:px-6 py-8 pb-28 space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
-        
-        {/* A. USER PROFILE HEADER AREA */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-slate-100 dark:border-slate-800/80 pb-6">
           <div className="flex items-center space-x-4">
             {user?.photoURL ? (
@@ -369,10 +416,7 @@ export default function GlobalSettingsScreen({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Column: Preferences & Account Sync */}
           <div className="space-y-8 text-left">
-            
-            {/* MEMBERSHIP & SUBSCRIPTION CARD (Only for Registered Cloud Users) */}
             {!isGuest && (() => {
               const subEndDate = getSubscriptionEndDate();
               const subStartDate = getSubscriptionStartDate();
@@ -426,7 +470,6 @@ export default function GlobalSettingsScreen({
                         : 'Enjoy all of ViaDia\'s travel planning tools for free. Upgrade to a Pro subscription (1, 2, 3, 5 years or lifetime) to remove all ads.'}
                     </p>
 
-                    {/* Prominent Subscription End Date Display */}
                     {subEndDate && (
                       <div className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-slate-800 flex items-center justify-between text-xs">
                         <span className="text-slate-500 dark:text-slate-400 font-medium">
@@ -446,7 +489,6 @@ export default function GlobalSettingsScreen({
                     )}
                   </div>
 
-                  {/* Transaction & Billing History Dropdown/List */}
                   {userTransactions.length > 0 && (
                     <div className="pt-2 border-t border-slate-100 dark:border-slate-800/60">
                       <button
@@ -515,7 +557,6 @@ export default function GlobalSettingsScreen({
               );
             })()}
 
-            {/* GLOBAL CHECKLIST MANAGER CARD */}
             <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
               <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800/50">
                 <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2">
@@ -539,7 +580,6 @@ export default function GlobalSettingsScreen({
               </button>
             </div>
 
-            {/* E. APP PREFERENCES */}
             <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
               <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2 pb-2 border-b border-slate-100 dark:border-slate-800/50">
                 <Settings className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
@@ -549,7 +589,6 @@ export default function GlobalSettingsScreen({
                 Customize the theme mode and the highlighted color accents used throughout viadia.
               </p>
 
-              {/* Theme Switcher Link style */}
               <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800/30">
                 <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Theme Mode</span>
                 <button
@@ -570,7 +609,6 @@ export default function GlobalSettingsScreen({
                 </button>
               </div>
 
-              {/* Accent highlight flat list */}
               <div className="space-y-3 py-2 border-b border-slate-100 dark:border-slate-800/30">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Color Accent</span>
@@ -607,7 +645,6 @@ export default function GlobalSettingsScreen({
                 </div>
               </div>
 
-              {/* Temperature Unit Toggle */}
               <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800/30">
                 <div>
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Temperature Unit</span>
@@ -639,7 +676,6 @@ export default function GlobalSettingsScreen({
                 </div>
               </div>
 
-              {/* Distance Unit Toggle */}
               <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800/30">
                 <div>
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Distance Unit</span>
@@ -671,7 +707,28 @@ export default function GlobalSettingsScreen({
                 </div>
               </div>
 
-              {/* Cloud Google Account Link style (Not shown for guest user: user && !user.email) */}
+              <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800/30">
+                <div>
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Default Trip Currency</span>
+                  <span className="text-[10px] text-slate-400">Base currency when creating a new trip</span>
+                </div>
+                {(() => {
+                  const curInfo = getCurrencyFlagAndInfo(defaultCurrency);
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrencyModal(true)}
+                      className="inline-flex items-center space-x-2 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-900 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-slate-200 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-700 transition cursor-pointer"
+                    >
+                      <span className="text-sm">{curInfo.flag}</span>
+                      <span className="text-xs font-mono font-extrabold text-slate-900 dark:text-white">{curInfo.code}</span>
+                      <span className="text-[10px] font-bold text-slate-400">({curInfo.symbol})</span>
+                      <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+                    </button>
+                  );
+                })()}
+              </div>
+
               {(!user || user.email) && (
                 <div className="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-800/30">
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Google Sync</span>
@@ -692,119 +749,112 @@ export default function GlobalSettingsScreen({
               )}
             </div>
 
-            {/* ACCOUNT SETTINGS CATEGORY */}
             <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
               <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2 pb-2 border-b border-slate-100 dark:border-slate-800/50">
                 <User className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
                 <span>Account Settings</span>
               </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Manage your display name, personal account security, and session settings.
-                </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Manage your display name, personal account security, and session settings.
+              </p>
 
-                {/* Display Name Modification */}
-                <div className="py-2 space-y-1.5">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Display Name</span>
-                  {isEditingName ? (
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                      <input
-                        type="text"
-                        value={editedName}
-                        onChange={(e) => setEditedName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleSaveName();
-                          if (e.key === 'Escape') {
-                            setIsEditingName(false);
-                            setEditedName(user?.displayName || '');
-                          }
-                        }}
-                        className="flex-1 min-w-0 px-3 py-1.5 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        placeholder="Enter display name"
-                        autoFocus
-                      />
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={handleSaveName}
-                          disabled={isSavingName}
-                          className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1"
-                        >
-                          {isSavingName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span>Save</span>}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsEditingName(false);
-                            setEditedName(user?.displayName || '');
-                          }}
-                          className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-medium transition cursor-pointer"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                        {user?.displayName || 'Travel Explorer'}
-                      </span>
+              <div className="py-2 space-y-1.5">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300 block">Display Name</span>
+                {isEditingName ? (
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <input
+                      type="text"
+                      value={editedName}
+                      onChange={(e) => setEditedName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveName();
+                        if (e.key === 'Escape') {
+                          setIsEditingName(false);
+                          setEditedName(user?.displayName || '');
+                        }
+                      }}
+                      className="flex-1 min-w-0 px-3 py-1.5 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Enter display name"
+                      autoFocus
+                    />
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleSaveName}
+                        disabled={isSavingName}
+                        className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition cursor-pointer flex items-center justify-center space-x-1"
+                      >
+                        {isSavingName ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span>Save</span>}
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
+                          setIsEditingName(false);
                           setEditedName(user?.displayName || '');
-                          setIsEditingName(true);
                         }}
-                        className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer flex items-center space-x-1"
+                        className="px-3.5 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl text-xs font-medium transition cursor-pointer"
                       >
-                        <Edit2 className="h-3.5 w-3.5" />
-                        <span>Edit Name</span>
+                        Cancel
                       </button>
                     </div>
-                  )}
-                </div>
-
-                {/* Logout Button inside Account Settings */}
-                {user && (
-                  <div className="pt-1">
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                      {user?.displayName || 'Travel Explorer'}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => setShowLogoutConfirm(true)}
-                      className="w-full py-2.5 px-4 border border-rose-200 dark:border-rose-900/50 bg-rose-50/20 hover:bg-rose-50/40 dark:bg-rose-950/10 text-xs font-black text-rose-600 dark:text-rose-400 rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                      onClick={() => {
+                        setEditedName(user?.displayName || '');
+                        setIsEditingName(true);
+                      }}
+                      className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer flex items-center space-x-1"
                     >
-                      <LogOut className="h-4 w-4" />
-                      <span>{isGuest ? 'Logout' : 'Logout'}</span>
+                      <Edit2 className="h-3.5 w-3.5" />
+                      <span>Edit Name</span>
                     </button>
                   </div>
                 )}
-
-                {/* Delete Account (Only for Registered Cloud Users) */}
-                {!isGuest && (
-                  <div className="p-4 rounded-2xl bg-rose-50/40 dark:bg-rose-950/10 border border-rose-200/80 dark:border-rose-900/40 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <span className="text-xs font-bold text-slate-900 dark:text-slate-100 block">Delete Account</span>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
-                          Permanently delete your user profile and remove all trip-related information, itineraries, packing checklists, and expense ledgers from the database.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setShowDeleteConfirm(true)}
-                        className="shrink-0 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl transition shadow-xs cursor-pointer flex items-center space-x-1.5"
-                      >
-                        <UserX className="h-3.5 w-3.5" />
-                        <span>Delete Account</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
+
+              {user && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowLogoutConfirm(true)}
+                    className="w-full py-2.5 px-4 border border-rose-200 dark:border-rose-900/50 bg-rose-50/20 hover:bg-rose-50/40 dark:bg-rose-950/10 text-xs font-black text-rose-600 dark:text-rose-400 rounded-xl transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                  >
+                    <LogOut className="h-4 w-4" />
+                    <span>Logout</span>
+                  </button>
+                </div>
+              )}
+
+              {!isGuest && (
+                <div className="p-4 rounded-2xl bg-rose-50/40 dark:bg-rose-950/10 border border-rose-200/80 dark:border-rose-900/40 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <span className="text-xs font-bold text-slate-900 dark:text-slate-100 block">Delete Account</span>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
+                        Permanently delete your user profile and remove all trip-related information, itineraries, packing checklists, and expense ledgers from the database.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className="shrink-0 px-3 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl transition shadow-xs cursor-pointer flex items-center space-x-1.5"
+                    >
+                      <UserX className="h-3.5 w-3.5" />
+                      <span>Delete Account</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Right Column: Backups, Actions & Logout */}
           <div className="space-y-8 text-left">
-            {/* G. DATABASE BACKUP / IMPORT & EXPORT PREFERENCES */}
             <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
               <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2 pb-2 border-b border-slate-100 dark:border-slate-800/50">
                 <Briefcase className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
@@ -875,7 +925,6 @@ export default function GlobalSettingsScreen({
                     </div>
                   </div>
 
-                  {/* Conflicting Trips Options */}
                   {preparedImport.conflictingTrips.length > 0 && (
                     <div className="space-y-3 pt-2 border-t border-indigo-100 dark:border-slate-800">
                       <div className="flex items-center justify-between">
@@ -967,7 +1016,6 @@ export default function GlobalSettingsScreen({
               )}
             </div>
 
-            {/* SIGN IN BUTTON FOR GUESTS */}
             {!user && (
               <div className="pt-4">
                 <button
@@ -980,14 +1028,12 @@ export default function GlobalSettingsScreen({
               </div>
             )}
 
-            {/* APP INFORMATION SECTION */}
             <div className="p-5 sm:p-6 bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl shadow-xs space-y-4 w-full text-left">
               <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2 pb-2 border-b border-slate-100 dark:border-slate-800/50">
                 <Info className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
                 <span>App Information</span>
               </h3>
 
-              {/* Share App Callout Card */}
               <div className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-50/90 to-blue-50/90 dark:from-indigo-950/40 dark:to-slate-900 border border-indigo-100/90 dark:border-indigo-900/40 flex items-center justify-between gap-3 shadow-xs">
                 <div className="flex items-center space-x-3 min-w-0">
                   <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
@@ -1059,7 +1105,6 @@ export default function GlobalSettingsScreen({
               </div>
             </div>
 
-            {/* CONTACT US SECTION */}
             <div className="pt-6 border-t border-slate-100 dark:border-slate-800/60 space-y-3 text-left">
               <h3 className="font-sans text-base font-bold text-slate-800 dark:text-white flex items-center space-x-2 pb-2 border-b border-slate-100 dark:border-slate-800/50">
                 <Mail className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
@@ -1090,15 +1135,14 @@ export default function GlobalSettingsScreen({
               </div>
             </div>
           </div>
+        </div>
 
-        {/* FOOTER SVG WORDMARK WITH RED HEART AT THE END OF THE SCREEN */}
         <div className="flex items-center justify-center space-x-2 pt-10 pb-4 border-t border-slate-200/60 dark:border-slate-800/60 mt-12">
           <Heart className="w-[20px] h-[20px] text-red-500 fill-red-500 shrink-0" />
           <ViadiaWordmark className="h-[20px] w-auto text-slate-800 dark:text-white" />
         </div>
       </main>
 
-      {/* CUSTOM LOGOUT CONFIRMATION MODAL */}
       {showLogoutConfirm && createPortal(
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200 text-center">
@@ -1131,7 +1175,6 @@ export default function GlobalSettingsScreen({
         document.body
       )}
 
-      {/* ACCOUNT DELETION CONFIRMATION MODAL */}
       {showDeleteConfirm && createPortal(
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900/60 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200 text-left space-y-4">
@@ -1191,7 +1234,6 @@ export default function GlobalSettingsScreen({
         document.body
       )}
 
-      {/* ABOUT US MODAL */}
       {showAboutModal && createPortal(
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200 text-left space-y-4 relative">
@@ -1235,7 +1277,6 @@ export default function GlobalSettingsScreen({
         document.body
       )}
 
-      {/* TERMS & PRIVACY POLICY MODAL */}
       {showTermsModal && createPortal(
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200 text-left space-y-4 relative">
@@ -1288,7 +1329,6 @@ export default function GlobalSettingsScreen({
         document.body
       )}
 
-      {/* CONTACT US MODAL */}
       {showContactModal && createPortal(
         <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200 text-left space-y-4 relative">
@@ -1335,16 +1375,17 @@ export default function GlobalSettingsScreen({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Topic</label>
-                  <select
-                    value={contactCategory}
-                    onChange={(e) => setContactCategory(e.target.value as any)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                  <button
+                    type="button"
+                    onClick={() => setIsTopicPickerOpen(true)}
+                    className="w-full flex items-center justify-between text-xs px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-slate-900 dark:text-white font-bold outline-none hover:bg-slate-100 dark:hover:bg-slate-900 transition cursor-pointer"
                   >
-                    <option value="support">General Support / Question</option>
-                    <option value="feature">Feature Request</option>
-                    <option value="bug">Report a Bug</option>
-                    <option value="other">Other</option>
-                  </select>
+                    <span className="flex items-center space-x-2 truncate">
+                      <span>{CONTACT_TOPIC_OPTIONS.find(c => c.value === contactCategory)?.icon}</span>
+                      <span>{CONTACT_TOPIC_OPTIONS.find(c => c.value === contactCategory)?.label}</span>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  </button>
                 </div>
 
                 <div>
@@ -1393,13 +1434,20 @@ export default function GlobalSettingsScreen({
         document.body
       )}
 
-      {/* OPEN SOURCE LICENSES MODAL */}
+      <SelectionBottomSheet
+        isOpen={isTopicPickerOpen}
+        onClose={() => setIsTopicPickerOpen(false)}
+        title="Select Message Topic"
+        options={CONTACT_TOPIC_OPTIONS}
+        selectedValue={contactCategory}
+        onSelect={(val) => setContactCategory(val as any)}
+      />
+
       <OpenSourceLicensesModal
         isOpen={showLicensesModal}
         onClose={() => setShowLicensesModal(false)}
       />
 
-      {/* GLOBAL CHECKLIST MANAGER MODAL */}
       <GlobalChecklistModal
         isOpen={showGlobalChecklistModal}
         onClose={() => setShowGlobalChecklistModal(false)}
@@ -1416,6 +1464,15 @@ export default function GlobalSettingsScreen({
           }
         }}
         onUpdateTrips={onUpdateTrips}
+      />
+
+      <CurrencyPickerBottomSheet
+        isOpen={showCurrencyModal}
+        onClose={() => setShowCurrencyModal(false)}
+        selectedCurrency={defaultCurrency}
+        onSelectCurrency={handleSelectCurrency}
+        title="Select Default Currency"
+        subtitle="This currency will be preselected when creating any new trip."
       />
     </div>
   );
