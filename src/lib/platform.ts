@@ -81,10 +81,6 @@ export function getActivePlatform(): TargetPlatform {
   const isMobileOrTabletResolution = shortestSide <= 768;
 
   if (isMobileOrTabletResolution) {
-    // We cannot reliably determine Android vs iOS from
-    // resolution alone, so this remains a web platform.
-    //
-    // The navigator checks above handle Android/iOS browsers.
     return 'web';
   }
 

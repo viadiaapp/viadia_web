@@ -5,10 +5,13 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { DEFAULT_APP_DATA } from "./src/data/seedData";
 import { DEFAULT_USD_RATES } from "./src/data/staticCurrencies";
 import { Trip } from "./src/types";
+import dotenv from "dotenv"
 
 let geminiClient: GoogleGenAI | null = null;
+dotenv.config()
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
+  console.log(apiKey)
   if (!apiKey) {
     throw new Error(
       "Gemini API key is not configured. Please ensure GEMINI_API_KEY is configured in Settings > Secrets."

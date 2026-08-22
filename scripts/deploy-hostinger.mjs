@@ -57,7 +57,7 @@ const FTP_PASSWORD = process.env.FTP_PASSWORD || '';
 //   .trim()
 //   .replace(/^\/+|\/+$/g, '');
 // const FTP_SECURE = process.env.FTP_SECURE || 'true';
-const FTP_KEEP = process.env.FTP_KEEP || 'node_modules,package.json,package-lock.json,tmp,.well-known,.htaccess';
+const FTP_KEEP = process.env.FTP_KEEP || 'node_modules,package.json,package-lock.json,tmp,.well-known,.htaccess,.env';
 // If you must connect via a raw IP but the server's TLS cert is issued for a
 // domain (common on shared hosting), set this to that domain so cert
 // validation checks the right name instead of the IP you dialed.
