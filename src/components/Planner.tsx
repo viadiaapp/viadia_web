@@ -65,6 +65,8 @@ interface PlannerProps {
   isReadOnly?: boolean;
   onOpenMap?: (placeId?: string) => void;
   onOpenUpgradeModal?: () => void;
+  user?: any;
+  isGuest?: boolean;
 }
 
 type MapTileStyle = "voyager" | "positron" | "streets" | "osm" | "satellite" | "terrain" | "dark";
@@ -329,7 +331,15 @@ export default function Planner({
   isReadOnly,
   onOpenMap,
   onOpenUpgradeModal = () => {},
+  user,
+  isGuest,
 }: PlannerProps) {
+  const isGuestUser = isGuest ?? (
+    !user?.email || 
+    Boolean(user?.uid && String(user.uid).startsWith('guest_')) || 
+    (typeof window !== 'undefined' && Boolean(localStorage.getItem('nomadsync_guest_user')) && !user?.email)
+  );
+
   const onUpdateTrips = (updatedTrips: { [id: string]: Trip }) => {
     if (isReadOnly) {
       console.warn("Attempted to update a read-only trip.");
@@ -1922,7 +1932,7 @@ export default function Planner({
               </button>
             )}
 
-            {!isReadOnly && (
+            {!isReadOnly && !isGuestUser && (
               <button
                 type="button"
                 onClick={() => {
@@ -1944,7 +1954,7 @@ export default function Planner({
           </div>
 
           {/* No Country Warning Banner */}
-          {showNoCountryNotice && (
+          {!isGuestUser && showNoCountryNotice && (
             <div className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 rounded-2xl flex items-center justify-between text-amber-800 dark:text-amber-300 text-xs shadow-xs animate-in fade-in duration-150">
               <div className="flex items-center space-x-2">
                 <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -1968,7 +1978,7 @@ export default function Planner({
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-slate-800 dark:text-slate-100 flex items-center space-x-2">
                 <Navigation className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                <span>Timeline</span>
+                <span>Itinerary</span>
               </h3>
             </div>
 
@@ -2081,7 +2091,7 @@ export default function Planner({
           />
 
           {/* Gemini AI Itinerary Generator Modal */}
-          {activeTrip && (
+          {activeTrip && !isGuestUser && (
             <GeminiItineraryModal
               isOpen={isGeminiModalOpen}
               onClose={() => setIsGeminiModalOpen(false)}

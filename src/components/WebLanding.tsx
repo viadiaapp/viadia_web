@@ -46,7 +46,6 @@ interface WebLandingProps {
   googleUserNeedName: boolean;
 }
 
-const CURRENCY_FLAG_MAP = new Map<string, string>();
 const PRIORITY_CURRENCY_FLAGS: { [code: string]: string } = {
   USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', INR: '🇮🇳', AUD: '🇦🇺', CAD: '🇨🇦',
   JPY: '🇯🇵', CNY: '🇨🇳', CHF: '🇨🇭', NZD: '🇳🇿', SGD: '🇸🇬', HKD: '🇭🇰',
@@ -54,18 +53,18 @@ const PRIORITY_CURRENCY_FLAGS: { [code: string]: string } = {
   AED: '🇦🇪', THB: '🇹🇭',
 };
 
-staticCurrenciesSeed.forEach((c) => {
-  if (c.currencyCode && c.flagEmoji) {
-    const code = c.currencyCode.toUpperCase();
-    if (!CURRENCY_FLAG_MAP.has(code)) {
-      CURRENCY_FLAG_MAP.set(code, c.flagEmoji);
-    }
-  }
-});
+const getCurrencyFlagAndInfo = (code: string) => {
+  const upperCode = code.toUpperCase();
+  const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === upperCode);
+  const flag = PRIORITY_CURRENCY_FLAGS[upperCode] || match?.flagEmoji || '🌐';
 
-Object.entries(PRIORITY_CURRENCY_FLAGS).forEach(([code, flag]) => {
-  CURRENCY_FLAG_MAP.set(code, flag);
-});
+  return {
+    code: upperCode,
+    name: match?.currencyName || upperCode,
+    symbol: match?.currencySymbol || '$',
+    flag: flag,
+  };
+};
 
 export default function WebLanding({
   onLoginWithGoogle,
@@ -166,7 +165,7 @@ export default function WebLanding({
         setLinkSentNotice(res.message);
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to send magic sign-in link.');
+      setError(err?.message || 'Failed to send sign-in link.');
     } finally {
       setIsSendingLink(false);
     }
@@ -280,20 +279,21 @@ export default function WebLanding({
   ];
 
   const currenciesForSheet = useMemo(() => {
-    const map = new Map<string, { code: string; name: string; symbol: string }>();
+    const map = new Map<string, { code: string; name: string; symbol: string; flag: string }>();
     staticCurrenciesSeed.forEach((c) => {
-      if (!map.has(c.currencyCode)) {
-        map.set(c.currencyCode, {
-          code: c.currencyCode,
-          name: c.currencyName,
-          symbol: c.currencySymbol,
-        });
+      if (c.currencyCode) {
+        const info = getCurrencyFlagAndInfo(c.currencyCode);
+        if (!map.has(info.code)) {
+          map.set(info.code, {
+            code: info.code,
+            name: info.name,
+            symbol: info.symbol,
+            flag: info.flag,
+          });
+        }
       }
     });
-    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code)).map((c) => ({
-      ...c,
-      flag: CURRENCY_FLAG_MAP.get(c.code.toUpperCase()) || c.flagEmoji || '🌐',
-    }));
+    return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code));
   }, []);
 
   const isDark = theme === 'dark';
@@ -911,7 +911,7 @@ export default function WebLanding({
                   }`}
                 >
                   <Mail className="h-4 w-4 shrink-0" />
-                  <span>Sign in with Email Magic Link</span>
+                  <span>Sign in with Email</span>
                 </button>
 
                 <button
@@ -980,7 +980,7 @@ export default function WebLanding({
                         />
                       </div>
                       <p className={`text-[10px] mt-1.5 ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
-                        We'll send a passwordless magic link to your email to sign in instantly.
+                        We'll send a passwordless link to your email to sign in instantly.
                       </p>
                     </div>
 
@@ -1006,7 +1006,7 @@ export default function WebLanding({
                           </>
                         ) : (
                           <>
-                            <span>Send Magic Link</span>
+                            <span>Send Link</span>
                             <ArrowRight className="h-4 w-4" />
                           </>
                         )}
@@ -1018,8 +1018,8 @@ export default function WebLanding({
                     <div className={`p-4 rounded-2xl border text-xs leading-relaxed ${
                       isDark ? 'bg-indigo-950/40 border-indigo-900/50 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-900'
                     }`}>
-                      <p className="font-extrabold text-sm mb-1">Magic Link Sent!</p>
-                      <p>{linkSentNotice || `A sign-in magic link has been sent to ${emailInput}. Check your inbox!`}</p>
+                      <p className="font-extrabold text-sm mb-1">Link Sent!</p>
+                      <p>{linkSentNotice || `A sign-in link has been sent to ${emailInput}. Check your inbox!`}</p>
                     </div>
 
                     <button
@@ -1065,11 +1065,7 @@ export default function WebLanding({
                       Default Trip Currency
                     </label>
                     {(() => {
-                      const upper = selectedCurrency.toUpperCase();
-                      const flag = CURRENCY_FLAG_MAP.get(upper) || '🌐';
-                      const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === upper);
-                      const name = match?.currencyName || upper;
-                      const symbol = match?.currencySymbol || '$';
+                      const curInfo = getCurrencyFlagAndInfo(selectedCurrency);
 
                       return (
                         <button
@@ -1082,14 +1078,14 @@ export default function WebLanding({
                           }`}
                         >
                           <div className="flex items-center space-x-2.5 min-w-0">
-                            <span className="text-base shrink-0">{flag}</span>
+                            <span className="text-base shrink-0">{curInfo.flag}</span>
                             <div className="truncate">
                               <span className="text-xs font-extrabold font-mono text-slate-900 dark:text-white">
-                                {upper}{' '}
-                                <span className="text-[10px] text-slate-400 font-bold">({symbol})</span>
+                                {curInfo.code}{' '}
+                                <span className="text-[10px] text-slate-400 font-bold">({curInfo.symbol})</span>
                               </span>
                               <span className="text-[10px] text-slate-500 dark:text-slate-400 block truncate">
-                                {name}
+                                {curInfo.name}
                               </span>
                             </div>
                           </div>

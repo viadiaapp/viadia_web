@@ -5,18 +5,23 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { DEFAULT_APP_DATA } from "./src/data/seedData";
 import { DEFAULT_USD_RATES } from "./src/data/staticCurrencies";
 import { Trip } from "./src/types";
-import dotenv from "dotenv"
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const apiKey = process.env.GEMINI_API_KEY;
+
+if (!apiKey) {
+  console.error("GEMINI_API_KEY is missing");
+}
 
 let geminiClient: GoogleGenAI | null = null;
-dotenv.config()
+
 function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  console.log(apiKey)
   if (!apiKey) {
-    throw new Error(
-      "Gemini API key is not configured. Please ensure GEMINI_API_KEY is configured in Settings > Secrets."
-    );
+    throw new Error("GEMINI_API_KEY is not configured on the server.");
   }
+
   if (!geminiClient) {
     geminiClient = new GoogleGenAI({
       apiKey,
@@ -27,8 +32,10 @@ function getGeminiClient(): GoogleGenAI {
       },
     });
   }
+
   return geminiClient;
 }
+
 
 async function startServer() {
   const app = express();
@@ -80,7 +87,7 @@ async function startServer() {
     }
 
     let code = requestedCode?.toUpperCase().trim();
-    
+
     // Host-side permission check:
     if (code && sharedTrips.has(code)) {
       const existingTrip = sharedTrips.get(code);
@@ -89,8 +96,8 @@ async function startServer() {
         const isOwner = userId && userId === existingTrip.ownerUid;
         const isAllowed = existingTrip.allowOthersToModify === true;
         if (!isOwner && !isAllowed) {
-          return res.status(403).json({ 
-            error: "Action is unauthorized. Please seek permission from the trip owner to allow modification of this trip." 
+          return res.status(403).json({
+            error: "Action is unauthorized. Please seek permission from the trip owner to allow modification of this trip."
           });
         }
       }
@@ -395,7 +402,7 @@ async function startServer() {
   // Helper to get curated destination suggestions
   function getCuratedDestinations(countries: string[]) {
     const results: Array<{ city: string; country: string; tagline: string; popularSpots: string[] }> = [];
-    
+
     for (const c of countries) {
       const normalized = c.toLowerCase().replace(/[^a-z]/g, "");
       let matched = false;
@@ -431,7 +438,7 @@ async function startServer() {
     const start = new Date(startDate + "T00:00:00");
     const end = new Date(endDate + "T00:00:00");
     const days: string[] = [];
-    
+
     if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
       const cur = new Date(start);
       while (cur <= end && days.length < 30) {
@@ -526,14 +533,14 @@ async function startServer() {
       } catch (err: any) {
         lastError = err;
         const errMsg = err?.message || String(err);
-        const isTransient = errMsg.includes("503") || 
-                            errMsg.includes("UNAVAILABLE") || 
-                            errMsg.includes("high demand") || 
-                            errMsg.includes("429") || 
-                            errMsg.includes("RESOURCE_EXHAUSTED");
-        
+        const isTransient = errMsg.includes("503") ||
+          errMsg.includes("UNAVAILABLE") ||
+          errMsg.includes("high demand") ||
+          errMsg.includes("429") ||
+          errMsg.includes("RESOURCE_EXHAUSTED");
+
         console.warn(`[Gemini Model ${model}] attempt failed (${errMsg}). Trying next fallback model if available...`);
-        
+
         if (isTransient && i < candidateModels.length - 1) {
           // Brief exponential backoff before trying next model
           const delay = Math.min(300 * Math.pow(1.5, i), 1000);
@@ -635,8 +642,8 @@ async function startServer() {
         pace === "relaxed"
           ? "Provide a relaxed schedule with 1 to 2 well-paced, scenic stops per day with plenty of leisure time."
           : pace === "packed"
-          ? "Provide an action-packed schedule with 3 to 4 exciting, well-sequenced stops per day covering morning, afternoon, and evening."
-          : "Provide a balanced moderate schedule with 2 to 3 well-sequenced stops per day (e.g. morning, afternoon, and optional evening/dinner highlight).";
+            ? "Provide an action-packed schedule with 3 to 4 exciting, well-sequenced stops per day covering morning, afternoon, and evening."
+            : "Provide a balanced moderate schedule with 2 to 3 well-sequenced stops per day (e.g. morning, afternoon, and optional evening/dinner highlight).";
 
       const prompt = `You are generating a daily travel itinerary for a trip titled "${tripTitle || 'Vacation'}".
 Trip Countries: ${countries.join(", ")}
@@ -760,7 +767,7 @@ CRITICAL RULES:
     });
   }
 
-  app.listen(PORT,() => {
+  app.listen(PORT, () => {
     console.log(`Server running on ${PORT}`);
   });
 }

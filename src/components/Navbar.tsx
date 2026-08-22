@@ -58,7 +58,7 @@ export default function Navbar({
 
   const tabs = [
     { id: 'summary', label: 'Summary', icon: Sparkles },
-    { id: 'planner', label: 'Timeline', icon: Calendar },
+    { id: 'planner', label: 'Itinerary', icon: Calendar },
     { id: 'expenses', label: 'Expenses', icon: DollarSign },
     { id: 'checklist', label: 'Lists', icon: CheckSquare },
     { id: 'settings', label: 'Settings', icon: Settings },

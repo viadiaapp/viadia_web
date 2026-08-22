@@ -24,13 +24,23 @@ interface SplashScreenProps {
 type OnboardingPage = 1 | 2 | 3 | 4 | 5;
 type AuthSubStep = 'methods' | 'magic-link' | 'guest-name' | 'google-name';
 
+const PRIORITY_CURRENCY_FLAGS: { [code: string]: string } = {
+  USD: '🇺🇸', EUR: '🇪🇺', GBP: '🇬🇧', INR: '🇮🇳', AUD: '🇦🇺', CAD: '🇨🇦',
+  JPY: '🇯🇵', CNY: '🇨🇳', CHF: '🇨🇭', NZD: '🇳🇿', SGD: '🇸🇬', HKD: '🇭🇰',
+  SEK: '🇸🇪', KRW: '🇰🇷', NOK: '🇳🇴', MXN: '🇲🇽', BRL: '🇧🇷', ZAR: '🇿🇦',
+  AED: '🇦🇪', THB: '🇹🇭',
+};
+
 const getCurrencyFlagAndInfo = (code: string) => {
-  const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === code.toUpperCase());
+  const upperCode = code.toUpperCase();
+  const match = staticCurrenciesSeed.find(c => c.currencyCode.toUpperCase() === upperCode);
+  const flag = PRIORITY_CURRENCY_FLAGS[upperCode] || match?.flagEmoji || '🌐';
+
   return {
-    code: code.toUpperCase(),
-    name: match?.currencyName || code,
+    code: upperCode,
+    name: match?.currencyName || upperCode,
     symbol: match?.currencySymbol || '$',
-    flag: match?.flagEmoji || '🌐',
+    flag: flag,
   };
 };
 
@@ -142,7 +152,7 @@ export default function SplashScreen({
     <div
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-300 relative overflow-hidden font-sans select-none flex flex-col justify-between"
+      className="min-h-[100svh] w-full bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 transition-colors duration-300 relative overflow-x-hidden font-sans select-none flex flex-col justify-between"
     >
       {/* Dedicated Top Utility Bar */}
       {currentPage > 1 && (
@@ -194,7 +204,7 @@ export default function SplashScreen({
                 setCurrentPage(2);
               }
             }}
-            className={`fixed inset-0 z-50 w-full h-full flex flex-col items-center justify-center overflow-hidden bg-slate-900 ${isLoggedInUser ? 'cursor-default' : 'cursor-pointer'}`}
+            className={`fixed inset-0 z-50 w-full h-[100svh] flex flex-col items-center justify-center overflow-hidden bg-slate-900 ${isLoggedInUser ? 'cursor-default' : 'cursor-pointer'}`}
           >
             <img
               src={splashBgImage}
@@ -207,7 +217,7 @@ export default function SplashScreen({
               initial={{ scale: 0.92, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ duration: 0.6, ease: "easeOut" }}
-              className="relative z-10 flex flex-col items-center justify-center space-y-4"
+              className="relative z-10 flex flex-col items-center justify-center space-y-4 px-6 text-center"
             >
               <ViadiaLogo className="w-[100px] h-[100px] filter drop-shadow-2xl" animateRoad={false} />
               <ViadiaWordmark className="w-[100px] h-auto drop-shadow-md" />
@@ -233,7 +243,7 @@ export default function SplashScreen({
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-between px-6 pt-2 pb-8 sm:pb-10 z-10"
           >
             <div className="w-full pt-2">
-              <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm">
+              <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm bg-slate-200 dark:bg-slate-800">
                 <img
                   src={onboardingPlanImage}
                   alt="Plan trips your way"
@@ -290,7 +300,7 @@ export default function SplashScreen({
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-between px-6 pt-2 pb-8 sm:pb-10 z-10"
           >
             <div className="w-full pt-2">
-              <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm">
+              <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm bg-slate-200 dark:bg-slate-800">
                 <img
                   src={onboardingTrackImage}
                   alt="Track everything in real-time"
@@ -347,7 +357,7 @@ export default function SplashScreen({
             className="flex-1 w-full max-w-md mx-auto flex flex-col justify-between px-6 pt-2 pb-8 sm:pb-10 z-10"
           >
             <div className="w-full pt-2">
-              <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm">
+              <div className="w-full aspect-[4/3.5] mx-auto relative rounded-2xl overflow-hidden shadow-sm bg-slate-200 dark:bg-slate-800">
                 <img
                   src={onboardingShareImage}
                   alt="Share your trip with anyone"
@@ -653,7 +663,7 @@ export default function SplashScreen({
                     {/* Default Currency Selector */}
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                        Default Trip Currency
+                        Your Currency
                       </label>
                       {(() => {
                         const curInfo = getCurrencyFlagAndInfo(selectedCurrency);

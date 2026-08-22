@@ -1775,6 +1775,8 @@ export default function App() {
                           setIsTripMapOpen(true);
                         }}
                         onOpenUpgradeModal={() => setShowLifetimePassModal(true)}
+                        user={user}
+                        isGuest={!user?.email || Boolean(user?.uid && user.uid.startsWith('guest_')) || syncStatus === 'local'}
                       />
                     )}
                     
