@@ -267,7 +267,10 @@ export default function SplashScreen({
 
             <div className="w-full flex items-center justify-between pt-4">
               <button
-                onClick={() => setCurrentPage(5)}
+                onClick={() => {
+                  setError(null);
+                  setCurrentPage(5);
+                }}
                 className="text-sm font-semibold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer px-2 py-1"
               >
                 Skip
@@ -324,7 +327,10 @@ export default function SplashScreen({
 
             <div className="w-full flex items-center justify-between pt-4">
               <button
-                onClick={() => setCurrentPage(5)}
+                onClick={() => {
+                  setError(null);
+                  setCurrentPage(5);
+                }}
                 className="text-sm font-semibold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer px-2 py-1"
               >
                 Skip
@@ -381,7 +387,10 @@ export default function SplashScreen({
 
             <div className="w-full flex items-center justify-between pt-4">
               <button
-                onClick={() => setCurrentPage(5)}
+                onClick={() => {
+                  setError(null);
+                  setCurrentPage(5);
+                }}
                 className="text-sm font-semibold text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer px-2 py-1"
               >
                 Skip
@@ -394,7 +403,10 @@ export default function SplashScreen({
               </div>
 
               <button
-                onClick={() => setCurrentPage(5)}
+                onClick={() => {
+                  setError(null);
+                  setCurrentPage(5);
+                }}
                 className="w-12 h-12 rounded-full bg-[#3661B6] hover:bg-[#2C5199] text-white flex items-center justify-center shadow-lg hover:shadow-xl transition-all cursor-pointer hover:scale-105 active:scale-95"
               >
                 <ArrowRight className="w-5 h-5" />
@@ -524,6 +536,7 @@ export default function SplashScreen({
                       onClick={() => {
                         setAuthSubStep('methods');
                         setLinkSent(false);
+                        setEmailInput('');
                         setError(null);
                       }}
                       className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-850 transition cursor-pointer"
