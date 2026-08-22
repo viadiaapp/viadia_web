@@ -49,20 +49,31 @@ dotenv.config({ path: path.join(projectRoot, '.env.deploy') });
 // Plain destructuring defaults only apply to `undefined` — CI providers (GitHub
 // Actions included) inject an unset secret as an empty string, not undefined,
 // which would silently skip these defaults. `||` catches both cases.
-const FTP_HOST = process.env.FTP_HOST || '';
-const FTP_USER = process.env.FTP_USER || '';
+// const FTP_HOST = process.env.FTP_HOST || '';
+// const FTP_USER = process.env.FTP_USER || '';
 const FTP_PASSWORD = process.env.FTP_PASSWORD || '';
-const FTP_PORT = process.env.FTP_PORT || '';
-const FTP_REMOTE_PATH = process.env.FTP_REMOTE_PATH || 'public_html';
-const FTP_SECURE = process.env.FTP_SECURE || 'true';
+// const FTP_PORT = process.env.FTP_PORT || '';
+// const FTP_REMOTE_PATH = (process.env.FTP_REMOTE_PATH || 'public_html')
+//   .trim()
+//   .replace(/^\/+|\/+$/g, '');
+// const FTP_SECURE = process.env.FTP_SECURE || 'true';
 const FTP_KEEP = process.env.FTP_KEEP || 'node_modules,package.json,package-lock.json,tmp,.well-known,.htaccess';
 // If you must connect via a raw IP but the server's TLS cert is issued for a
 // domain (common on shared hosting), set this to that domain so cert
 // validation checks the right name instead of the IP you dialed.
-const FTP_TLS_SERVERNAME = process.env.FTP_TLS_SERVERNAME || '';
+// const FTP_TLS_SERVERNAME = process.env.FTP_TLS_SERVERNAME || '';
 // Last resort only: disables TLS certificate validation entirely. Prefer
 // FTP_TLS_SERVERNAME above — this opens the door to man-in-the-middle attacks.
 const FTP_TLS_INSECURE = process.env.FTP_TLS_INSECURE === 'true';
+
+const FTP_HOST = (process.env.FTP_HOST || '').trim();
+const FTP_USER = (process.env.FTP_USER || '').trim();
+const FTP_PORT = (process.env.FTP_PORT || '').trim();
+const FTP_REMOTE_PATH = (process.env.FTP_REMOTE_PATH || 'public_html')
+  .trim()
+  .replace(/^\/+|\/+$/g, '');
+const FTP_SECURE = (process.env.FTP_SECURE || 'true').trim();
+const FTP_TLS_SERVERNAME = (process.env.FTP_TLS_SERVERNAME || '').trim();
 
 const distDir = path.join(projectRoot, 'dist');
 const testConnectionOnly = process.argv.includes('--test-connection');
