@@ -1,50 +1,95 @@
-export type TargetPlatform = 'auto' | 'web' | 'android' | 'ios';
+export type TargetPlatform = 'web' | 'android' | 'ios';
 
-export function getStoredPlatform(): TargetPlatform {
-  if (typeof window === 'undefined') return 'auto';
-  const saved = localStorage.getItem('viadia_platform_target') as TargetPlatform;
-  if (saved === 'web' || saved === 'android' || saved === 'ios') return saved;
-  return 'auto';
-}
+export function getActivePlatform(): TargetPlatform {
 
-export function setStoredPlatform(platform: TargetPlatform): void {
-  if (typeof window === 'undefined') return;
-  if (platform === 'auto') {
-    localStorage.removeItem('viadia_platform_target');
-  } else {
-    localStorage.setItem('viadia_platform_target', platform);
-  }
-}
-
-export function getActivePlatform(): 'web' | 'android' | 'ios' {
-  if (typeof window === 'undefined') return 'web';
-
-  // 1. Check URL query override e.g. ?platform=android, ?platform=ios, or ?platform=web
-  const params = new URLSearchParams(window.location.search);
-  const param = params.get('platform');
-  if (param === 'android' || param === 'ios' || param === 'web') {
-    return param;
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return 'web';
   }
 
-  // 2. Check stored override in localStorage
-  const stored = getStoredPlatform();
-  if (stored === 'web' || stored === 'android' || stored === 'ios') {
-    return stored;
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  const capacitor = (window as any).Capacitor;
+
+  if (capacitor) {
+    try {
+      if (typeof capacitor.isNativePlatform === 'function') {
+        if (capacitor.isNativePlatform()) {
+          const nativePlatform =
+            typeof capacitor.getPlatform === 'function'
+              ? capacitor.getPlatform()
+              : '';
+
+          if (nativePlatform === 'ios') {
+            return 'ios';
+          }
+
+          if (nativePlatform === 'android') {
+            return 'android';
+          }
+        }
+      }
+
+      // Fallback for older Capacitor setups
+      if (typeof capacitor.getPlatform === 'function') {
+        const nativePlatform = capacitor.getPlatform();
+
+        if (nativePlatform === 'ios') {
+          return 'ios';
+        }
+
+        if (nativePlatform === 'android') {
+          return 'android';
+        }
+      }
+    } catch {
+      // Ignore Capacitor detection errors and continue
+      // with browser-based detection.
+    }
   }
 
-  // 3. Auto-detect iOS or Android UserAgent / Capacitor / WebView
-  const ua = navigator.userAgent || navigator.vendor || (window as any).opera || '';
-  const isIOSUA = /iphone|ipad|ipod/i.test(ua) || (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  if (isIOSUA) {
+  // ---------------------------------------------------------
+  // 2. iOS browser / WebView
+  // ---------------------------------------------------------
+  const isIOS =
+    /iPhone|iPad|iPod/i.test(ua) ||
+    (
+      platform === 'MacIntel' &&
+      navigator.maxTouchPoints > 1
+    );
+
+  if (isIOS) {
     return 'ios';
   }
 
-  const isAndroidUA = /android/i.test(ua);
-  const isWebView = /wv|Capacitor|Cordova|AndroidClient/i.test(ua) || (window as any).Capacitor !== undefined;
+  // ---------------------------------------------------------
+  // 3. Android browser / WebView
+  // ---------------------------------------------------------
+  const isAndroid = /Android/i.test(ua);
 
-  if (isAndroidUA || isWebView) {
+  if (isAndroid) {
     return 'android';
   }
 
+  // ---------------------------------------------------------
+  // 4. Resolution / viewport fallback
+  // ---------------------------------------------------------
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+
+  const shortestSide = Math.min(width, height);
+
+  const isMobileOrTabletResolution = shortestSide <= 768;
+
+  if (isMobileOrTabletResolution) {
+    // We cannot reliably determine Android vs iOS from
+    // resolution alone, so this remains a web platform.
+    //
+    // The navigator checks above handle Android/iOS browsers.
+    return 'web';
+  }
+
+  // ---------------------------------------------------------
+  // 5. Desktop / normal browser
+  // ---------------------------------------------------------
   return 'web';
 }
