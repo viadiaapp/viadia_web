@@ -30,6 +30,7 @@ import heroVideo from '../assets/video/viadia_hero.mp4';
 import { onboardingPlanImage, onboardingTrackImage, onboardingListImage } from '../assets/splash';
 import { sendInboundMessage } from '../lib/db';
 import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
+import { TermsModal } from './TermsModal';
 import { staticCurrenciesSeed } from '../data/staticCurrencies';
 import { getDefaultCurrency, setUserPreferences } from '../lib/userPreferences';
 
@@ -83,6 +84,7 @@ export default function WebLanding({
   const [guestName, setGuestName] = useState('');
   const [selectedCurrency, setSelectedCurrency] = useState<string>(() => getDefaultCurrency());
   const [showCurrencyModal, setShowCurrencyModal] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [linkSent, setLinkSent] = useState(false);
   const [isSendingLink, setIsSendingLink] = useState(false);
@@ -1130,12 +1132,26 @@ export default function WebLanding({
 
             <div className="text-center pt-2">
               <p className={`text-[10px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                By continuing, you agree to Viadia Terms & Privacy.
+                By continuing, you agree to{' '}
+                <button
+                  type="button"
+                  onClick={() => setShowTermsModal(true)}
+                  className="font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer bg-transparent border-none p-0 inline"
+                >
+                  Viadia Terms & Privacy
+                </button>
+                .
               </p>
             </div>
           </div>
         </div>
       )}
+
+      {/* Terms & Privacy Policy Modal */}
+      <TermsModal
+        isOpen={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+      />
     </div>
   );
 }

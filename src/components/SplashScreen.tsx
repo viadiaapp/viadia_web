@@ -4,6 +4,7 @@ import { User, Loader2, ArrowRight, ArrowLeft, Moon, Sun, AlertCircle, Globe, Ma
 import { ViadiaLogo, ViadiaWordmark, ViadiaPunchline } from './BrandComponents';
 import { splashBgImage, onboardingPlanImage, onboardingTrackImage, onboardingShareImage } from '../assets/splash';
 import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
+import { TermsModal } from './TermsModal';
 import { getDefaultCurrency, setUserPreferences } from '../lib/userPreferences';
 import { staticCurrenciesSeed } from '../data/staticCurrencies';
 
@@ -62,6 +63,7 @@ export default function SplashScreen({
   const [guestName, setGuestName] = useState('');
   const [selectedCurrency, setSelectedCurrency] = useState<string>(() => getDefaultCurrency());
   const [showCurrencyModal, setShowCurrencyModal] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
   const [emailInput, setEmailInput] = useState('');
   const [linkSent, setLinkSent] = useState(false);
   const [isSendingLink, setIsSendingLink] = useState(false);
@@ -516,9 +518,13 @@ export default function SplashScreen({
 
                   <p className="text-xs text-slate-400 dark:text-slate-500 text-center pt-6 max-w-xs mx-auto leading-relaxed font-medium">
                     By continuing, you agree to our{' '}
-                    <span className="text-[#3661B6] dark:text-[#3661B6] font-semibold cursor-pointer hover:underline">
+                    <button
+                      type="button"
+                      onClick={() => setShowTermsModal(true)}
+                      className="text-[#3661B6] dark:text-[#3661B6] font-semibold cursor-pointer hover:underline inline bg-transparent p-0 border-none outline-none"
+                    >
                       Terms & Privacy Policy
-                    </span>
+                    </button>
                   </p>
                 </motion.div>
               ) : authSubStep === 'magic-link' ? (
@@ -748,6 +754,12 @@ export default function SplashScreen({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Terms & Privacy Policy Modal */}
+      <TermsModal
+        isOpen={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+      />
     </div>
   );
 }
