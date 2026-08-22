@@ -677,66 +677,49 @@ CRITICAL RULES:
           properties: {
             tripSummary: {
               type: Type.STRING,
-              description: "A 1-2 sentence compelling summary of the curated itinerary."
+              description: "Brief 2-3 sentence overview of the trip experience.",
             },
             itinerary: {
               type: Type.ARRAY,
-              description: "Array of scheduled activity items across the entire trip date range.",
+              description: "Array of scheduled activity items.",
               items: {
                 type: Type.OBJECT,
                 properties: {
-                  date: {
-                    type: Type.STRING,
-                    description: "Date in YYYY-MM-DD format."
-                  },
-                  time: {
-                    type: Type.STRING,
-                    description: "Time in HH:MM format."
-                  },
-                  title: {
-                    type: Type.STRING,
-                    description: "Name of the attraction or activity."
-                  },
-                  description: {
-                    type: Type.STRING,
-                    description: "Helpful description and visitor tips."
-                  },
-                  address: {
-                    type: Type.STRING,
-                    description: "Real physical address with city and country."
-                  },
-                  lat: {
-                    type: Type.NUMBER,
-                    description: "Accurate latitude."
-                  },
-                  lng: {
-                    type: Type.NUMBER,
-                    description: "Accurate longitude."
-                  },
-                  city: {
-                    type: Type.STRING,
-                    description: "City or region."
-                  },
-                  category: {
-                    type: Type.STRING,
-                    description: "Category of the stop."
-                  }
+                  date: { type: Type.STRING, description: "YYYY-MM-DD" },
+                  time: { type: Type.STRING, description: "HH:MM in 24h format" },
+                  title: { type: Type.STRING, description: "Activity name" },
+                  description: { type: Type.STRING, description: "Brief details and tips" },
+                  address: { type: Type.STRING, description: "Physical location address" },
+                  lat: { type: Type.NUMBER, description: "Latitude coordinate" },
+                  lng: { type: Type.NUMBER, description: "Longitude coordinate" },
+                  city: { type: Type.STRING, description: "City or district name" },
+                  category: { type: Type.STRING, description: "Activity category" },
                 },
-                required: ["date", "time", "title", "description", "address", "lat", "lng"]
-              }
-            }
+                required: [
+                  "date",
+                  "time",
+                  "title",
+                  "description",
+                  "address",
+                  "lat",
+                  "lng",
+                  "city",
+                  "category",
+                ],
+              },
+            },
           },
-          required: ["itinerary"]
-        }
+          required: ["tripSummary", "itinerary"],
+        },
       });
 
       if (parsed && Array.isArray(parsed.itinerary) && parsed.itinerary.length > 0) {
         return res.json(parsed);
       }
-      throw new Error("Invalid itinerary structure from Gemini model.");
+      throw new Error("Invalid output from Gemini itinerary generator.");
     } catch (err: any) {
-      console.warn("Serving curated fallback itinerary due to Gemini 503 / temporary load:", err?.message);
-      const fallbackItinerary = generateCuratedFallbackItinerary({
+      console.warn("Serving curated fallback itinerary due to Gemini error:", err?.message);
+      const fallback = generateCuratedFallbackItinerary({
         tripTitle,
         countries,
         startDate,
@@ -745,33 +728,30 @@ CRITICAL RULES:
         pace,
         interests,
       });
-      res.json({
-        ...fallbackItinerary,
-        fallback: true
-      });
+      return res.json(fallback);
     }
   });
 
-  // Vite middleware for development
+  // Serve static files / Vite middleware in development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: "spa",
+      appType: "custom",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = path.resolve(__dirname, "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      res.sendFile(path.resolve(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, () => {
-    console.log(`Server running on ${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
 startServer().catch((err) => {
-  console.error("Failed to start server", err);
+  console.error("Failed to start server:", err);
 });
