@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Calendar, 
@@ -292,7 +292,7 @@ export default function WebLanding({
     });
     return Array.from(map.values()).sort((a, b) => a.code.localeCompare(b.code)).map((c) => ({
       ...c,
-      flag: CURRENCY_FLAG_MAP.get(c.code.toUpperCase()) || '🌐',
+      flag: CURRENCY_FLAG_MAP.get(c.code.toUpperCase()) || c.flagEmoji || '🌐',
     }));
   }, []);
 
