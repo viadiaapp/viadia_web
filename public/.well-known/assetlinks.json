@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.viadia.app",
+      "sha256_cert_fingerprints": [
+        "A6:E8:8E:46:5D:D0:38:34:49:79:FC:13:80:A2:92:4C:A5:86:16:BF:DC:76:6F:AD:FE:8B:EC:78:A4:05:0E:0D"
+      ]
+    }
+  }
+]

@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { DEFAULT_APP_DATA } from "./src/data/seedData";
@@ -732,6 +733,19 @@ CRITICAL RULES:
     }
   });
 
+  // Android App Links / Digital Asset Links endpoint
+  app.get("/.well-known/assetlinks.json", (req, res) => {
+    const publicPath = path.join(process.cwd(), "public", ".well-known", "assetlinks.json");
+    const distPath = path.join(process.cwd(), "dist", ".well-known", "assetlinks.json");
+    const targetFile = fs.existsSync(publicPath) ? publicPath : (fs.existsSync(distPath) ? distPath : null);
+    
+    if (targetFile) {
+      res.setHeader("Content-Type", "application/json");
+      res.sendFile(targetFile);
+    } else {
+      res.status(404).json({ error: "assetlinks.json not found" });
+    }
+  });
   // Serve static files / Vite middleware in development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
