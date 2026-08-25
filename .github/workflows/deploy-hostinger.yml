@@ -22,6 +22,8 @@ jobs:
         run: npm ci --legacy-peer-deps
 
       - name: Build web app
+        env:
+          VITE_BACKEND_API_URL: https://api.viadia.in
         run: npm run build
 
       - name: Deploy dist/ to Hostinger via FTP
