@@ -1,25 +1,11 @@
-// Deploys the built web app + server (dist/) to Hostinger over FTP/FTPS.
-//
-// FTP_REMOTE_PATH is also the root of Hostinger's Node.js app (hPanel > Node.js):
-// dist/server.cjs is its startup file, and it requires express/@google/genai/etc.
-// from node_modules at runtime (esbuild bundled it with --packages=external, see
-// package.json's "build" script) rather than inlining them. So this script:
+// Deploys the built frontend (dist/, a static Vite build) to Hostinger static/shared hosting over
+// FTP/FTPS. The backend (server/) is a separate deployment — see server/package.json — typically
+// on its own VPS; it is NOT touched by this script.
 //
 //   1. Connects using FTP_HOST / FTP_USER / FTP_PASSWORD.
 //   2. Wipes the contents of FTP_REMOTE_PATH on the server (keeping anything
-//      listed in FTP_KEEP — by default node_modules, package.json,
-//      package-lock.json, .htaccess, .well-known and tmp, so the Node app's
-//      dependencies and Passenger restart hook survive the wipe).
+//      listed in FTP_KEEP — by default .htaccess, .well-known and .env).
 //   3. Uploads everything in the local dist/ folder in its place.
-//   4. Uploads package.json (and package-lock.json if present) to
-//      FTP_REMOTE_PATH so the manifest node_modules was installed from stays
-//      current. This does NOT run `npm install` for you — if dependencies
-//      changed, run it from hPanel's Node.js terminal after this deploy.
-//   5. Best-effort: touches tmp/restart.txt in FTP_REMOTE_PATH. Hostinger's
-//      Node.js hosting is Passenger-based on most plans, where this makes the
-//      app reload on its next request. Harmless no-op if your plan doesn't
-//      use Passenger — verify the app actually picked up the new code after
-//      your first deploy, and restart manually from hPanel if it didn't.
 //
 // Run `npm run build` first — this script does not build for you.
 //
@@ -38,7 +24,6 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
-import { Readable } from 'stream';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -57,7 +42,7 @@ const FTP_PASSWORD = process.env.FTP_PASSWORD || '';
 //   .trim()
 //   .replace(/^\/+|\/+$/g, '');
 // const FTP_SECURE = process.env.FTP_SECURE || 'true';
-const FTP_KEEP = process.env.FTP_KEEP || 'tmp,.well-known,.htaccess,.env';
+const FTP_KEEP = process.env.FTP_KEEP || '.well-known,.htaccess,.env';
 // If you must connect via a raw IP but the server's TLS cert is issued for a
 // domain (common on shared hosting), set this to that domain so cert
 // validation checks the right name instead of the IP you dialed.
@@ -195,27 +180,6 @@ async function main() {
 
     console.log('\nUploading dist/ ...');
     await client.uploadFromDir(distDir);
-
-    console.log('\nUploading dependency manifest...');
-    for (const file of ['package.json', 'package-lock.json']) {
-      const localPath = path.join(projectRoot, file);
-      if (fs.existsSync(localPath)) {
-        console.log(`  uploading ${file}`);
-        await client.uploadFrom(localPath, file);
-      }
-    }
-
-    console.log('\nTriggering app restart (best-effort)...');
-    try {
-      // cwd is still FTP_REMOTE_PATH here (nothing above this point changed
-      // directory), so this creates/enters FTP_REMOTE_PATH/tmp.
-      await client.ensureDir('tmp');
-      await client.uploadFrom(Readable.from(Buffer.from(new Date().toISOString())), 'restart.txt');
-      await client.cdup();
-      console.log('  touched tmp/restart.txt — if your plan uses Passenger, the app reloads on its next request.');
-    } catch (restartError) {
-      console.warn(`  could not touch tmp/restart.txt (${restartError.message || restartError.code || restartError}) — restart the app manually from hPanel if needed.`);
-    }
 
     console.log('\n✔ Deploy complete.\n');
   } catch (error) {

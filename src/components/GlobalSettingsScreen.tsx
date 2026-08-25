@@ -521,7 +521,7 @@ export default function GlobalSettingsScreen({
                               </div>
                               <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
                                 <span>Order: {txn.orderId || txn.transactionId}</span>
-                                <span>{txn.paymentMethod === 'google_play' ? 'Google Play' : txn.paymentMethod === 'apple_pay' ? 'Apple Pay' : 'In-App'}</span>
+                                <span>{txn.paymentMethod === 'razorpay' ? 'Razorpay' : txn.paymentMethod === 'google_play' ? 'Google Play' : txn.paymentMethod === 'apple_pay' ? 'Apple Pay' : 'In-App'}</span>
                               </div>
                               <div className="flex items-center justify-between text-[10px] text-slate-400">
                                 <span>Period: {txn.planStartDate} to {txn.planEndDate.startsWith('2099') ? 'Lifetime' : txn.planEndDate}</span>

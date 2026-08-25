@@ -6,7 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import DateRangePicker from './DateRangePicker';
 import CountryPickerModal from './CountryPickerModal';
 import { CurrencyPickerBottomSheet } from './CurrencyPickerBottomSheet';
-import { getStaticCurrencies, initTripGclistStyling } from '../lib/db';
+import { getStaticCurrencies, initTripGclistStyling, saveTripMaster, saveTripToDB } from '../lib/db';
 import { getCountryBannerUrl } from '../lib/countryBanners';
 import emptyTripsImage from '../assets/images/empty_trips.png';
 import { StaticCurrency, staticCurrenciesSeed } from '../data/staticCurrencies';
@@ -1334,22 +1334,21 @@ export default function WorldMap({
                           onClick={async (e) => {
                             e.stopPropagation();
                             try {
-                              let codeToShare = '';
+                              let codeToShare = trip.code || '';
                               try {
-                                const res = await fetch('/api/trips', {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ trip }),
-                                });
-                                if (res.ok) {
-                                  const data = await res.json();
-                                  codeToShare = data.code;
+                                if (!codeToShare) {
+                                  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                                  let code = '';
+                                  for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+                                  await saveTripMaster(code, user?.uid || '', false);
+                                  await saveTripToDB(code, { ...trip, code });
+                                  codeToShare = code;
                                 } else {
-                                  codeToShare = trip.id.substring(0, 6).toUpperCase();
+                                  await saveTripToDB(codeToShare, trip);
                                 }
                               } catch (fetchErr) {
                                 console.warn('Network error sharing, using offline code fallback:', fetchErr);
-                                codeToShare = trip.id.substring(0, 6).toUpperCase();
+                                codeToShare = codeToShare || trip.id.substring(0, 6).toUpperCase();
                               }
 
                               const tripName = trip.title || (trip as any).destination || 'My Trip';

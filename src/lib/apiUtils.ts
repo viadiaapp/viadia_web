@@ -1,5 +1,4 @@
 import { DEFAULT_USD_RATES } from '../data/staticCurrencies';
-import { Capacitor } from '@capacitor/core';
 
 export interface LocationSearchResult {
   place_id?: number | string;
@@ -11,31 +10,16 @@ export interface LocationSearchResult {
 }
 
 /**
- * Resolves the API base URL:
- * - If running natively inside an Android / iOS Capacitor APK or custom webview,
- *   points to the live cloud backend.
- * - If running in a web browser, uses relative root paths ('') to proxy via Vite/Express.
+ * Resolves the API base URL. The backend (server/) is deployed independently of the frontend
+ * (frontend: static hosting; backend: e.g. a VPS) on every platform now, not just native apps —
+ * so this always points at the configured backend, with '' (same-origin relative paths) as the
+ * fallback for local dev, where vite.config.ts's dev proxy forwards /api to the backend for you.
  */
-export const REMOTE_BACKEND_URL =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BACKEND_API_URL) ||
-  'https://ais-dev-gc4q66q5xjca34g3x5iler-34061687996.asia-southeast1.run.app';
+export const REMOTE_BACKEND_URL: string =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_BACKEND_API_URL) || '';
 
 export function getApiBaseUrl(): string {
-  try {
-    if (Capacitor.isNativePlatform()) {
-      return REMOTE_BACKEND_URL;
-    }
-    if (typeof window !== 'undefined') {
-      const isCapacitorProtocol = window.location.protocol === 'capacitor:' || window.location.protocol === 'ionic:';
-      const isLocalhostApp = window.location.hostname === 'localhost' && (!window.location.port || window.location.port === '80');
-      if (isCapacitorProtocol || isLocalhostApp) {
-        return REMOTE_BACKEND_URL;
-      }
-    }
-  } catch {
-    // Ignore and fallback
-  }
-  return '';
+  return REMOTE_BACKEND_URL;
 }
 
 /**

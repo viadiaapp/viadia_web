@@ -1,10 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Allow full read and write access for all collections and documents
+
+    // All app data now goes through the backend (server/), which reads/writes via the Firebase
+    // Admin SDK — Admin SDK requests bypass these rules entirely, so this only blocks direct
+    // access from any client using the public web SDK config (firebase-applet-config.json).
+    // Do not deploy this until the backend migration has been verified working end-to-end.
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

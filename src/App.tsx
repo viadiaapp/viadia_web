@@ -1133,44 +1133,30 @@ export default function App() {
     try {
       if (!codeToShare) {
         try {
-          const response = await fetch('/api/trips', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'X-User-Id': user?.uid || ''
-            },
-            body: JSON.stringify({ trip: activeTrip, code: activeTrip.code })
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            codeToShare = data.code;
-            setJoinedTripCode(data.code);
-            
-            const updatedTrips = { ...appData.trips };
-            if (updatedTrips[activeTrip.id]) {
-              updatedTrips[activeTrip.id] = { ...updatedTrips[activeTrip.id], code: data.code };
-            }
-            handleUpdateTrips(updatedTrips);
-          } else {
-            codeToShare = activeTrip.id.substring(0, 6).toUpperCase();
+          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+          let code = '';
+          for (let i = 0; i < 6; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+
+          await saveTripMaster(code, user?.uid || '', false);
+          await saveTripToDB(code, { ...activeTrip, code });
+
+          codeToShare = code;
+          setJoinedTripCode(code);
+
+          const updatedTrips = { ...appData.trips };
+          if (updatedTrips[activeTrip.id]) {
+            updatedTrips[activeTrip.id] = { ...updatedTrips[activeTrip.id], code, allowOthersToModify: false };
           }
+          handleUpdateTrips(updatedTrips);
         } catch (fetchErr) {
-          console.warn('Network failed to contact viadia server, using offline code fallback:', fetchErr);
+          console.warn('Failed to register trip code with server, using offline code fallback:', fetchErr);
           codeToShare = activeTrip.id.substring(0, 6).toUpperCase();
         }
       } else {
         try {
-          await fetch('/api/trips', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'X-User-Id': user?.uid || ''
-            },
-            body: JSON.stringify({ trip: activeTrip, code: codeToShare })
-          });
+          await saveTripToDB(codeToShare, activeTrip);
         } catch (fetchErr) {
-          console.warn('Network failed to register existing code on server:', fetchErr);
+          console.warn('Failed to register existing code on server:', fetchErr);
         }
       }
       

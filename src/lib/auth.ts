@@ -1,50 +1,26 @@
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithPopup, 
+import {
+  getAuth,
+  signInWithPopup,
   signInWithCredential,
-  GoogleAuthProvider, 
-  OAuthProvider, 
-  onAuthStateChanged, 
-  User, 
+  GoogleAuthProvider,
+  OAuthProvider,
+  onAuthStateChanged,
+  User,
   signOut,
   sendSignInLinkToEmail,
   isSignInWithEmailLink,
   signInWithEmailLink
 } from 'firebase/auth';
-import { 
-  initializeFirestore, 
-  setLogLevel,
-  persistentLocalCache,
-  persistentMultipleTabManager
-} from 'firebase/firestore';
 import { Capacitor } from '@capacitor/core';
 import { FirebaseAuthentication } from '@capacitor-firebase/authentication';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+// Only Firebase Auth is initialized client-side. All app data (Firestore) now goes through the
+// backend (server/), which verifies this SDK's ID tokens with the Firebase Admin SDK — see
+// src/lib/apiClient.ts and src/lib/db.ts.
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-
-const dbId = (firebaseConfig as any).firestoreDatabaseId || '(default)';
-
-// Set firestore log level to silent to prevent offline/unavailable warnings from polluting logs
-try {
-  setLogLevel('silent');
-} catch {
-  // ignore if already set
-}
-
-export const db = initializeFirestore(
-  app,
-  {
-    ignoreUndefinedProperties: true,
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager()
-    }),
-    experimentalAutoDetectLongPolling: true,
-  },
-  dbId
-);
 
 const googleProvider = new GoogleAuthProvider();
 googleProvider.addScope('https://www.googleapis.com/auth/drive.file');

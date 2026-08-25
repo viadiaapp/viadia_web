@@ -5,6 +5,7 @@ import { isSubscriptionActive, isLifetimePass, setUserSubscription, UserTier, ge
 import { useBackButton } from '../lib/backButtonHandler';
 import { auth, getLoginProvider } from '../lib/auth';
 import { getUserDetails, saveUserDetails, getSubscriptionPlans, recordTransaction } from '../lib/db';
+import { authFetch } from '../lib/apiClient';
 import { getActivePlatform } from '../lib/platform';
 import { ViadiaLogo, ViadiaWordmark } from './BrandComponents';
 import { SubscriptionPlan, SubscriptionTransaction } from '../types';
@@ -37,6 +38,7 @@ export default function LifetimePassModal({
   const [paymentMode, setPaymentMode] = useState<PaymentGatewayMode>('none');
   const [paymentStep, setPaymentStep] = useState<'idle' | 'authorizing' | 'complete'>('idle');
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [razorpayError, setRazorpayError] = useState<string | null>(null);
 
   useBackButton(
     'lifetime-pass-modal',
@@ -305,6 +307,100 @@ export default function LifetimePassModal({
         onClose();
       }, 1600);
     }, 1800);
+  };
+
+  function loadRazorpayScript(): Promise<boolean> {
+    return new Promise((resolve) => {
+      if ((window as any).Razorpay) return resolve(true);
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  }
+
+  // Real payment flow: the backend creates the Razorpay order and is the only thing that can ever
+  // grant the subscription (see server/routes/payments.ts) — this just drives Razorpay's checkout UI.
+  const handleRazorpayCheckout = async () => {
+    setIsProcessing(true);
+    setRazorpayError(null);
+    try {
+      const loaded = await loadRazorpayScript();
+      if (!loaded) throw new Error('Could not load Razorpay checkout. Please check your connection and try again.');
+
+      const order = await authFetch<{
+        orderId: string;
+        amount: number;
+        currency: string;
+        keyId: string;
+        transactionId: string;
+        planName: string;
+        userName?: string;
+        userEmail?: string;
+      }>('/api/payments/razorpay/create-order', {
+        method: 'POST',
+        body: JSON.stringify({ planId: selectedPlan.id }),
+      });
+
+      const rzp = new (window as any).Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        order_id: order.orderId,
+        name: 'Viadia',
+        description: order.planName,
+        prefill: { name: order.userName, email: order.userEmail },
+        theme: { color: '#4f46e5' },
+        handler: async (response: any) => {
+          try {
+            const result = await authFetch<{ success: boolean; subscription: { tier: UserTier; startDate: string; endDate: string } }>(
+              '/api/payments/razorpay/verify',
+              {
+                method: 'POST',
+                body: JSON.stringify({
+                  razorpay_order_id: response.razorpay_order_id,
+                  razorpay_payment_id: response.razorpay_payment_id,
+                  razorpay_signature: response.razorpay_signature,
+                  transactionId: order.transactionId,
+                }),
+              }
+            );
+
+            setUserSubscription({
+              tier: result.subscription.tier,
+              startDate: result.subscription.startDate,
+              endDate: result.subscription.endDate,
+            });
+            setCurrentTier(result.subscription.tier);
+            setCurrentEndDate(result.subscription.endDate);
+            setPaymentMode('none');
+            setShowSuccessToast(true);
+            if (onTierChanged) onTierChanged(result.subscription.tier);
+            setTimeout(() => {
+              setShowSuccessToast(false);
+              setPaymentStep('idle');
+              onClose();
+            }, 1600);
+          } catch (verifyErr: any) {
+            setRazorpayError(verifyErr?.message || 'Payment verification failed. If you were charged, please contact support.');
+          } finally {
+            setIsProcessing(false);
+          }
+        },
+        modal: {
+          ondismiss: () => setIsProcessing(false),
+        },
+      });
+      rzp.on('payment.failed', (resp: any) => {
+        setRazorpayError(resp?.error?.description || 'Payment failed. Please try again.');
+        setIsProcessing(false);
+      });
+      rzp.open();
+    } catch (err: any) {
+      setRazorpayError(err?.message || 'Failed to start payment.');
+      setIsProcessing(false);
+    }
   };
 
   const formatDisplayDate = (dStr: string | null): string => {
@@ -612,7 +708,30 @@ export default function LifetimePassModal({
                 Choose your preferred payment system to activate <strong className="text-slate-800 dark:text-slate-200">{selectedPlan.name} (${selectedPlan.discountedPrice.toFixed(2)} {selectedPlan.currency})</strong>:
               </p>
 
+              {razorpayError && (
+                <div className="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs text-rose-700 dark:text-rose-300">
+                  {razorpayError}
+                </div>
+              )}
+
               <div className="mt-5 space-y-3">
+                <button
+                  onClick={handleRazorpayCheckout}
+                  disabled={isProcessing}
+                  className="w-full p-4 rounded-2xl border-2 border-emerald-500/40 hover:border-emerald-600 bg-gradient-to-r from-emerald-50 to-indigo-50 dark:from-emerald-950/40 dark:to-slate-900 text-slate-900 dark:text-white font-bold text-xs flex items-center justify-between shadow-sm transition cursor-pointer active:scale-98 disabled:opacity-50"
+                >
+                  <div className="flex items-center space-x-3">
+                    <div className="w-8 h-8 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center font-black text-emerald-600 text-sm">
+                      <CreditCard className="h-4 w-4" />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-sm font-extrabold text-slate-900 dark:text-white">Pay with Razorpay</p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">Cards, UPI, Netbanking & Wallets</p>
+                    </div>
+                  </div>
+                  {isProcessing ? <Loader2 className="h-4 w-4 text-emerald-500 animate-spin" /> : <ArrowRight className="h-4 w-4 text-emerald-500" />}
+                </button>
+
                 <button
                   onClick={() => executePayment('google_play')}
                   className="w-full p-4 rounded-2xl border-2 border-indigo-500/30 hover:border-indigo-600 bg-gradient-to-r from-indigo-50 to-blue-50 dark:from-indigo-950/50 dark:to-slate-900 text-slate-900 dark:text-white font-bold text-xs flex items-center justify-between shadow-sm transition cursor-pointer active:scale-98"
