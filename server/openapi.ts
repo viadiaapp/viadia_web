@@ -229,6 +229,30 @@ export const openApiSpec = {
         responses: { 200: { description: "OK" }, 403: errorResponse },
       },
     },
+    "/api/trips/{code}/changes": {
+      post: {
+        tags: ["Trips"],
+        summary: "Log a trip change entry (trip_transaction_master/{code}/changes/{changeId}), changeId allocated via a sequential per-trip counter. Matches lib/db.ts's logTripChange -- a changeId looks the same regardless of which side wrote it. Non-critical: logging failures never fail the response.",
+        security: bearerAuth,
+        parameters: [{ name: "code", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  operation: { type: "string", enum: ["created", "updated", "deleted"] },
+                  fieldPath: { type: "string" },
+                  newValue: {},
+                },
+                required: ["operation"],
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
     "/api/users/{uid}": {
       get: {
         tags: ["Users"],
@@ -256,8 +280,9 @@ export const openApiSpec = {
     "/api/users/lookup/by-email": {
       get: {
         tags: ["Users"],
-        summary: "Look up your own user record by your token's verified email",
+        summary: "With no email query param: your own full profile (by your token's verified email). With ?email=X: looks up that email and returns only the public-safe subset (name/email/userCode) -- used by the owner-invite flow to check whether an invited email already has an account.",
         security: bearerAuth,
+        parameters: [{ name: "email", in: "query", required: false, schema: { type: "string" } }],
         responses: { 200: { description: "OK, or null if not found" }, 401: errorResponse },
       },
     },
@@ -325,6 +350,22 @@ export const openApiSpec = {
           { name: "X-Admin-Secret", in: "header", required: true, schema: { type: "string" } },
         ],
         responses: { 200: { description: "OK" }, 403: errorResponse },
+      },
+    },
+    "/api/subscriptions/me": {
+      get: {
+        tags: ["Subscriptions"],
+        summary: "The caller's own current subscription state (user_subscriptions/{userCode}), or null if they've never had one. Read-only -- real subscription grants only ever happen through a verified purchase (see services/subscriptionService.ts's applyPurchasedPlan).",
+        security: bearerAuth,
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
+    "/api/subscriptions/me/normalize-lifetime": {
+      post: {
+        tags: ["Subscriptions"],
+        summary: "Fixes an old data-format inconsistency where some lifetime subscriptions had an arbitrary end date instead of the canonical '2099-12-31' sentinel. Takes no body -- the qualifying condition (is this user's EXISTING subscription already active and lifetime-equivalent?) is re-derived server-side from Firestore, never trusted from the client. Cannot grant, activate, or upgrade a subscription; only normalizes an end date on one that already qualifies.",
+        security: bearerAuth,
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
       },
     },
     "/api/transactions/by-user-code/{userCode}": {

@@ -309,4 +309,48 @@ router.delete(
   })
 );
 
+// Matches lib/db.ts's logTripChange -- same transactional sequential-counter pattern (the counter
+// lives on trip_transaction_master/{code} itself, actual entries in its /changes subcollection),
+// so a changeId looks the same regardless of which side wrote it.
+router.post(
+  "/:code/changes",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const code = normalizeCode(req.params.code);
+    const { operation, fieldPath, newValue } = req.body || {};
+    if (!operation || !["created", "updated", "deleted"].includes(operation)) {
+      return res.status(400).json({ error: "operation must be one of: created, updated, deleted." });
+    }
+    const changedBy = await resolveUserCode(req.uid);
+
+    const counterRef = adminDb.collection("trip_transaction_master").doc(code);
+    try {
+      const changeId = await adminDb.runTransaction(async (transaction) => {
+        const snap = await transaction.get(counterRef);
+        const data = snap.exists ? snap.data() : null;
+        const next = data && typeof data.nextChangeId === "number" && data.nextChangeId >= 1 ? data.nextChangeId : 1;
+        transaction.set(counterRef, { nextChangeId: next + 1 }, { merge: true });
+        return next;
+      });
+
+      const changeRef = counterRef.collection("changes").doc(String(changeId));
+      await changeRef.set({
+        tripCode: code,
+        changeId,
+        operation,
+        fieldPath: fieldPath ?? null,
+        newValue: newValue ?? null,
+        changedBy,
+        createdAt: new Date().toISOString(),
+      });
+
+      res.json({ success: true, changeId });
+    } catch (err: any) {
+      // Non-critical logging -- never fail the caller's actual save over this.
+      console.warn("Failed logging trip change:", err?.message);
+      res.json({ success: false });
+    }
+  })
+);
+
 export default router;

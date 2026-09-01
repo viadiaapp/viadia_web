@@ -50,14 +50,26 @@ router.put(
   })
 );
 
+// With no ?email= query param: the caller's own profile (full). With one: looks up that
+// arbitrary email and returns only the public-safe subset (name/email/userCode) -- same privacy
+// pattern as GET /:uid for someone else's profile. Needed for the owner-invite flow (checking
+// whether an invited email already has an account) -- this is no more exposed than the frontend's
+// current direct-Firestore equivalent, just routed through the server now.
 router.get(
   "/lookup/by-email",
   requireAuth,
   asyncHandler(async (req, res) => {
-    if (!req.userEmail) return res.json(null);
-    const snap = await adminDb.collection("users").where("email", "==", req.userEmail).limit(1).get();
+    const targetEmail = (req.query.email as string) || req.userEmail;
+    if (!targetEmail) return res.json(null);
+
+    const snap = await adminDb.collection("users").where("email", "==", targetEmail).limit(1).get();
     if (snap.empty) return res.json(null);
-    res.json(snap.docs[0].data());
+
+    const data = snap.docs[0].data();
+    if (targetEmail === req.userEmail) {
+      return res.json(data);
+    }
+    res.json({ uid: data.uid, name: data.name, email: data.email, userCode: data.userCode });
   })
 );
 
@@ -76,7 +88,7 @@ router.post(
   "/next-code",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const counterRef = adminDb.collection("series_code").doc("current");
+    const counterRef = adminDb.collection("series_code").doc("CURRENT");
     try {
       const assignedCode = await adminDb.runTransaction(async (tx) => {
         const snap = await tx.get(counterRef);
