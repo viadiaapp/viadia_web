@@ -40,10 +40,21 @@ async function startServer() {
   );
 
   // This is a standalone API — the frontend is deployed separately (static hosting), so CORS is
-  // wide open by default. Set FRONTEND_ORIGIN to restrict it to your actual frontend domain(s).
-  const allowedOrigin = process.env.FRONTEND_ORIGIN || "*";
+  // wide open by default. Set FRONTEND_ORIGIN to restrict it -- comma-separated if you need more
+  // than one (e.g. your web domain(s) plus the native app's own origin, which is a genuinely
+  // different value -- see .env.example for how to find the app's exact origin).
+  const allowedOriginsEnv = process.env.FRONTEND_ORIGIN;
+  const allowedOrigins = allowedOriginsEnv ? allowedOriginsEnv.split(",").map((o) => o.trim()) : null;
   app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", allowedOrigin);
+    const requestOrigin = req.headers.origin;
+    if (!allowedOrigins) {
+      res.header("Access-Control-Allow-Origin", "*");
+    } else if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
+      // CORS requires echoing back the exact matching origin, not a list -- the browser only
+      // accepts a single value in this header.
+      res.header("Access-Control-Allow-Origin", requestOrigin);
+      res.header("Vary", "Origin");
+    }
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-admin-secret");
     if (req.method === "OPTIONS") {
