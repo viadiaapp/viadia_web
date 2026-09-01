@@ -1,10 +1,9 @@
-// Default subscription plans, seeded into Firestore's `subscription_plans` collection the first
+// Default subscription plans, seeded into Firestore's `subscription_types` collection the first
 // time it's read empty. Kept as a standalone copy (not imported from ../../src) so server/ has zero
-// dependencies outside itself.
+// dependencies outside itself. Field names match src/types.ts#SubscriptionPlan exactly.
 export interface SubscriptionPlanSeed {
-  id: string;
-  name: string;
-  type: string;
+  planId: string;
+  planName: string;
   durationYears: number;
   originalPrice: number;
   discountedPrice: number;
@@ -16,9 +15,8 @@ export interface SubscriptionPlanSeed {
 
 export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlanSeed[] = [
   {
-    id: '1_year',
-    name: '1 Year Pro',
-    type: '1_year',
+    planId: '1_year',
+    planName: '1 Year Pro',
     durationYears: 1,
     originalPrice: 1.99,
     discountedPrice: 1.00,
@@ -28,9 +26,8 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlanSeed[] = [
     popular: false,
   },
   {
-    id: '2_year',
-    name: '2 Year Pro',
-    type: '2_year',
+    planId: '2_year',
+    planName: '2 Year Pro',
     durationYears: 2,
     originalPrice: 3.49,
     discountedPrice: 1.80,
@@ -40,9 +37,8 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlanSeed[] = [
     popular: false,
   },
   {
-    id: '3_year',
-    name: '3 Year Pro',
-    type: '3_year',
+    planId: '3_year',
+    planName: '3 Year Pro',
     durationYears: 3,
     originalPrice: 4.99,
     discountedPrice: 2.50,
@@ -52,9 +48,8 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlanSeed[] = [
     popular: true,
   },
   {
-    id: '5_year',
-    name: '5 Year Pro',
-    type: '5_year',
+    planId: '5_year',
+    planName: '5 Year Pro',
     durationYears: 5,
     originalPrice: 7.99,
     discountedPrice: 3.99,
@@ -64,9 +59,8 @@ export const DEFAULT_SUBSCRIPTION_PLANS: SubscriptionPlanSeed[] = [
     popular: false,
   },
   {
-    id: 'lifetime',
-    name: 'Lifetime Pro',
-    type: 'lifetime',
+    planId: 'lifetime',
+    planName: 'Lifetime Pro',
     durationYears: 99,
     originalPrice: 14.99,
     discountedPrice: 7.99,

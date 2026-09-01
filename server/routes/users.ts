@@ -1,11 +1,14 @@
 import { Router } from "express";
-import { adminAuth, adminDb } from "../firebaseAdmin";
+import { adminDb } from "../firebaseAdmin";
 import { requireAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
 
 const router = Router();
 
-const RESTRICTED_FIELDS = ["subscription_tier", "sub_start_date", "sub_end_date", "adTier", "userTier", "uid", "createdAt"];
+// Subscription state no longer lives on the user profile at all (see user_subscriptions/{userCode}),
+// so there's nothing subscription-related left to strip/protect here. isActive is the one
+// system-managed field a client must never set directly (only /me DELETE and /reactivate touch it).
+const RESTRICTED_FIELDS = ["uid", "createdAt", "isActive"];
 
 function stripRestrictedFields(body: Record<string, any>) {
   const clean = { ...body };
@@ -14,7 +17,7 @@ function stripRestrictedFields(body: Record<string, any>) {
 }
 
 // Full profile for the caller themselves; a public-safe subset (name/email/userCode) for anyone else
-// (used e.g. to show a trip's owner display name — never exposes subscription/tier data cross-account).
+// (used e.g. to show a trip's owner display name).
 router.get(
   "/:uid",
   requireAuth,
@@ -39,15 +42,7 @@ router.put(
       ...stripRestrictedFields(req.body || {}),
       uid: req.uid,
       createdAt: existing.exists ? existing.data()!.createdAt : new Date().toISOString(),
-      ...(existing.exists
-        ? {
-            subscription_tier: existing.data()!.subscription_tier,
-            sub_start_date: existing.data()!.sub_start_date,
-            sub_end_date: existing.data()!.sub_end_date,
-            adTier: existing.data()!.adTier,
-            userTier: existing.data()!.userTier,
-          }
-        : {}),
+      isActive: existing.exists ? existing.data()!.isActive !== false : true,
     };
     await ref.set(payload, { merge: true });
     const updated = await ref.get();
@@ -129,47 +124,37 @@ router.post(
   })
 );
 
+// Soft-delete reactivation: flips isActive back to true on the existing users/{uid} (or by-email)
+// doc. There is no separate deleted_users archive anymore -- the record was never actually removed.
 router.post(
   "/reactivate",
   requireAuth,
   asyncHandler(async (req, res) => {
+    const uid = req.uid!;
     const email = req.userEmail;
-    const currentUid = req.uid!;
-    let deletedSnap = email ? await adminDb.collection("deleted_users").where("email", "==", email).limit(1).get() : null;
-    let deletedDoc: any = deletedSnap && !deletedSnap.empty ? deletedSnap.docs[0] : null;
-    if (!deletedDoc) {
-      const byUid = await adminDb.collection("deleted_users").doc(currentUid).get();
-      if (byUid.exists) deletedDoc = byUid;
-    }
-    if (!deletedDoc) return res.json(null);
 
-    const deletedUser = deletedDoc.data()!;
-    const isAdFree = deletedUser.adTier !== undefined ? deletedUser.adTier : deletedUser.userTier === "lifetime";
-    const tierName = deletedUser.userTier || (isAdFree ? "lifetime" : "free");
-
-    const reactivated = {
-      uid: currentUid,
-      email: deletedUser.email || email || null,
-      name: deletedUser.name || "Traveler",
-      userCode: deletedUser.userCode || null,
-      adTier: isAdFree,
-      userTier: tierName,
-      subscription_tier: deletedUser.subscription_tier,
-      sub_start_date: deletedUser.sub_start_date,
-      sub_end_date: deletedUser.sub_end_date,
-      createdAt: deletedUser.createdAt || new Date().toISOString(),
-    };
-
-    await adminDb.collection("users").doc(currentUid).set(reactivated, { merge: true });
-    await deletedDoc.ref.delete();
-    if (deletedUser.uid && deletedUser.uid !== deletedDoc.id) {
-      await adminDb.collection("deleted_users").doc(deletedUser.uid).delete().catch(() => {});
+    let ref = adminDb.collection("users").doc(uid);
+    let snap = await ref.get();
+    if (!snap.exists && email) {
+      const byEmail = await adminDb.collection("users").where("email", "==", email).limit(1).get();
+      if (!byEmail.empty) {
+        ref = byEmail.docs[0].ref;
+        snap = byEmail.docs[0];
+      }
     }
 
+    if (!snap.exists || snap.data()!.isActive !== false) {
+      return res.json(null); // nothing to reactivate
+    }
+
+    const reactivated = { ...snap.data()!, uid, isActive: true };
+    await ref.set(reactivated, { merge: true });
     res.json(reactivated);
   })
 );
 
+// Deletes owned trips (and their ownership/per-user data), then soft-deletes the account itself
+// by flipping isActive to false -- mirrors the client's deleteUserAccountData() exactly.
 router.delete(
   "/me",
   requireAuth,
@@ -178,60 +163,33 @@ router.delete(
     const userRef = adminDb.collection("users").doc(uid);
     const userSnap = await userRef.get();
     const uDetails = userSnap.exists ? userSnap.data()! : null;
-    const codeToDelete: string | null = uDetails?.userCode || null;
-
-    if (uDetails) {
-      await adminDb
-        .collection("deleted_users")
-        .doc(uid)
-        .set(
-          {
-            uid,
-            email: uDetails.email || req.userEmail || null,
-            name: uDetails.name || "Traveler",
-            userCode: codeToDelete,
-            adTier: uDetails.adTier ?? false,
-            userTier: uDetails.userTier || "free",
-            subscription_tier: uDetails.subscription_tier,
-            sub_start_date: uDetails.sub_start_date,
-            sub_end_date: uDetails.sub_end_date,
-            createdAt: uDetails.createdAt || new Date().toISOString(),
-            deletedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-    }
+    const userCode: string | null = uDetails?.userCode || null;
 
     const ownedTripCodes = new Set<string>();
-    const ownedTrips = await adminDb.collection("trips").where("ownerUid", "==", uid).get();
-    ownedTrips.forEach((d) => {
-      const code = (d.data().code || d.id || "").toString().toUpperCase().trim();
-      if (code) ownedTripCodes.add(code);
-    });
-    const ownedMasters = await adminDb.collection("trip_master").where("ownerUid", "==", uid).get();
-    ownedMasters.forEach((d) => ownedTripCodes.add(d.id));
-    if (codeToDelete) {
-      const tcm = await adminDb.collection("user_tripcode_master").doc(codeToDelete).get();
-      if (tcm.exists) {
-        (tcm.data()!.tripCodes || []).forEach((c: string) => {
-          if (c) ownedTripCodes.add(c.toUpperCase().trim());
-        });
-      }
+    if (userCode) {
+      const ownedMasters = await adminDb.collection("trip_owner_user_master").where("owner", "==", userCode).get();
+      ownedMasters.forEach((d) => ownedTripCodes.add(d.id));
     }
 
     for (const code of ownedTripCodes) {
       await adminDb.collection("trips").doc(code).delete().catch(() => {});
-      await adminDb.collection("trip_master").doc(code).delete().catch(() => {});
-      await adminDb.collection("trip_gclist_styling").doc(code).delete().catch(() => {});
+      await adminDb.collection("trip_owner_user_master").doc(code).delete().catch(() => {});
     }
 
-    if (codeToDelete) {
-      await adminDb.collection("user_tripcode_master").doc(codeToDelete).delete().catch(() => {});
-      await adminDb.collection("user_configs").doc(codeToDelete).delete().catch(() => {});
+    if (userCode) {
+      // Clean up every user_specific_trip_list entry this user has (owned or joined), not just
+      // the trips they owned -- matches the client cleaning up joined-trip data too.
+      const listSnap = await adminDb.collection("user_specific_trip_list").where("userCode", "==", userCode).get();
+      const batch = adminDb.batch();
+      listSnap.forEach((d) => batch.delete(d.ref));
+      await batch.commit().catch(() => {});
+
+      await adminDb.collection("user_configs").doc(userCode).delete().catch(() => {});
+      await adminDb.collection("user_trip_association_master").doc(userCode).delete().catch(() => {});
     }
 
-    await userRef.delete().catch(() => {});
-    await adminAuth.deleteUser(uid).catch((err) => console.warn("Admin deleteUser failed:", err?.message || err));
+    // Soft-delete: flip isActive to false, keep the users/{uid} doc (and userCode) intact.
+    await userRef.set({ ...(uDetails || { uid, name: "Traveler" }), uid, isActive: false }, { merge: true }).catch(() => {});
 
     res.json({ success: true });
   })
@@ -259,26 +217,27 @@ router.put(
   })
 );
 
+// Replaces the old user_tripcode_master/{userCode} -> {tripCodes: []} lookup. The client now gets
+// this by querying user_specific_trip_list where userCode == X, so this just proxies that query
+// (kept for any older client still calling it, but new code should call the client's
+// getUserTripCodes()-equivalent directly instead).
 router.get(
   "/tripcodes/:userCode",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const snap = await adminDb.collection("user_tripcode_master").doc(req.params.userCode).get();
-    if (!snap.exists) return res.json({ userCode: req.params.userCode, tripCodes: [] });
-    res.json(snap.data());
+    const snap = await adminDb.collection("user_specific_trip_list").where("userCode", "==", req.params.userCode).get();
+    const tripCodes = snap.docs.map((d) => (d.data().tripCode as string)).filter(Boolean);
+    res.json({ userCode: req.params.userCode, tripCodes });
   })
 );
 
-router.put(
-  "/tripcodes/:userCode",
+// Returns this user's role on every trip they're associated with (owned or joined).
+router.get(
+  "/associations/:userCode",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { tripCodes } = req.body || {};
-    await adminDb
-      .collection("user_tripcode_master")
-      .doc(req.params.userCode)
-      .set({ userCode: req.params.userCode, tripCodes: tripCodes || [] }, { merge: true });
-    res.json({ success: true });
+    const snap = await adminDb.collection("user_trip_association_master").doc(req.params.userCode).get();
+    res.json(snap.exists ? snap.data() : {});
   })
 );
 

@@ -1,14 +1,16 @@
-import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "../firebaseAdmin";
 
+// Mirrors src/types.ts#SubscriptionPlan exactly (subscription_types/{planId}).
 export interface SubscriptionPlanDoc {
-  id: string;
-  name: string;
-  type: string;
+  planId: string;
+  planName: string;
   durationYears: number;
   originalPrice: number;
   discountedPrice: number;
   currency: string;
+  description?: string;
+  badge?: string;
+  popular?: boolean;
 }
 
 function isActiveEndDate(endDate?: string | null): boolean {
@@ -27,86 +29,93 @@ export function calculateNewEndDate(plan: SubscriptionPlanDoc, currentEndDate?: 
   return base.toISOString().split("T")[0];
 }
 
+// Same generation scheme as the client's generateSubscriptionCode() in src/lib/db.ts --
+// intentionally identical so a subscriptionCode looks the same regardless of which side created
+// it. No Firestore counter/transaction needed since collisions are astronomically unlikely
+// (ms-precision timestamp + 4 random base36 chars) and this ledger is append-only.
+function generateSubscriptionCode(): string {
+  return `SUB${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+}
+
 // The single authoritative place a purchase turns into subscription access. Called from both the
-// client-facing /verify endpoint and the server-to-server webhook, so it's idempotent: if the
-// transaction is already 'completed' it just returns the current state instead of re-applying it.
+// client-facing /verify endpoint and the server-to-server webhook, so it's idempotent: if a
+// subscription_transaction_master entry already exists for this Razorpay orderId with
+// status 'completed', it returns that existing state instead of granting access a second time.
 export async function applyPurchasedPlan(params: {
-  uid: string;
+  userCode: string;
   planId: string;
   orderId: string;
   paymentId?: string;
   paymentMethod: string;
-  transactionId: string;
-}): Promise<{ tier: string; startDate: string; endDate: string }> {
-  const { uid, planId, orderId, paymentId, paymentMethod, transactionId } = params;
+}): Promise<{ planId: string; startDate: string; endDate: string; subscriptionCode: string }> {
+  const { userCode, planId, orderId, paymentId, paymentMethod } = params;
 
-  return adminDb.runTransaction(async (tx) => {
-    const txnRef = adminDb.collection("transactions").doc(transactionId);
-    const userRef = adminDb.collection("users").doc(uid);
-
-    const [txnSnap, userSnap] = await Promise.all([tx.get(txnRef), tx.get(userRef)]);
-    const txnData = txnSnap.exists ? txnSnap.data()! : null;
-    const user = userSnap.exists ? userSnap.data()! : {};
-
-    if (txnData?.status === "completed") {
+  const existingTxnQuery = await adminDb
+    .collection("subscription_transaction_master")
+    .where("orderId", "==", orderId)
+    .limit(1)
+    .get();
+  if (!existingTxnQuery.empty) {
+    const existingTxn = existingTxnQuery.docs[0].data();
+    if (existingTxn.status === "completed") {
+      const subSnap = await adminDb.collection("user_subscriptions").doc(userCode).get();
+      const sub = subSnap.exists ? subSnap.data()! : null;
       return {
-        tier: user.subscription_tier || "free",
-        startDate: user.sub_start_date,
-        endDate: user.sub_end_date,
+        planId: existingTxn.planId,
+        startDate: sub?.effectiveStartDate || existingTxn.createdAt,
+        endDate: sub?.effectiveEndDate || existingTxn.createdAt,
+        subscriptionCode: existingTxn.subscriptionCode,
       };
     }
+  }
 
-    const planSnap = await tx.get(adminDb.collection("subscription_plans").doc(planId));
-    if (!planSnap.exists) throw new Error(`Unknown subscription plan: ${planId}`);
-    const plan = planSnap.data() as SubscriptionPlanDoc;
+  const planSnap = await adminDb.collection("subscription_types").doc(planId).get();
+  if (!planSnap.exists) throw new Error(`Unknown subscription plan: ${planId}`);
+  const plan = planSnap.data() as SubscriptionPlanDoc;
 
-    const isCurrentlyActive = isActiveEndDate(user.sub_end_date) || user.subscription_tier === "lifetime";
-    const todayStr = new Date().toISOString().split("T")[0];
-    const startDate = isCurrentlyActive && user.sub_start_date ? user.sub_start_date : todayStr;
-    const periodStart = isCurrentlyActive && user.sub_end_date ? user.sub_end_date : todayStr;
-    const endDate = calculateNewEndDate(plan, isCurrentlyActive ? user.sub_end_date : null);
+  const subRef = adminDb.collection("user_subscriptions").doc(userCode);
+  const subSnap = await subRef.get();
+  const existingSub = subSnap.exists ? subSnap.data()! : null;
 
-    tx.set(
-      userRef,
-      {
-        subscription_tier: plan.type,
-        userTier: plan.type,
-        sub_start_date: startDate,
-        sub_end_date: endDate,
-        adTier: true,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
+  const isCurrentlyActive = existingSub?.isActive === true && isActiveEndDate(existingSub?.effectiveEndDate);
+  const todayStr = new Date().toISOString().split("T")[0];
+  const startDate = isCurrentlyActive && existingSub?.effectiveStartDate ? existingSub.effectiveStartDate : todayStr;
+  const endDate = calculateNewEndDate(plan, isCurrentlyActive ? existingSub?.effectiveEndDate : null);
 
-    tx.set(
-      txnRef,
-      {
-        id: transactionId,
-        transactionId,
-        uid,
-        userCode: user.userCode || null,
-        userEmail: user.email || null,
-        userName: user.name || "Traveler",
-        planId: plan.id,
-        planName: plan.name,
-        planType: plan.type,
-        durationYears: plan.durationYears,
-        amountPaid: plan.discountedPrice,
-        originalPrice: plan.originalPrice,
-        currency: plan.currency,
-        planStartDate: periodStart,
-        planEndDate: endDate,
-        paymentMethod,
-        orderId,
-        paymentId: paymentId || null,
-        status: "completed",
-        createdAt: txnData?.createdAt || new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
+  const subscriptionCode = generateSubscriptionCode();
+  const now = new Date().toISOString();
 
-    return { tier: plan.type, startDate, endDate };
-  });
+  const batch = adminDb.batch();
+  batch.set(
+    subRef,
+    {
+      userCode,
+      subscriptionCode,
+      planId: plan.planId,
+      effectiveStartDate: startDate,
+      effectiveEndDate: endDate,
+      isActive: true,
+      createdAt: now,
+    },
+    { merge: true }
+  );
+  batch.set(
+    adminDb.collection("subscription_transaction_master").doc(subscriptionCode),
+    {
+      subscriptionCode,
+      userCode,
+      amountPaid: plan.discountedPrice,
+      currency: plan.currency,
+      planId: plan.planId,
+      transactionId: paymentId || subscriptionCode,
+      orderId,
+      paymentMethod,
+      status: "completed",
+      createdAt: now,
+    },
+    { merge: true }
+  );
+  await batch.commit();
+
+  return { planId: plan.planId, startDate, endDate, subscriptionCode };
 }

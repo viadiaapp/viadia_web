@@ -45,15 +45,38 @@ export const openApiSpec = {
           startDate: { type: "string", format: "date" },
           endDate: { type: "string", format: "date" },
           countries: { type: "array", items: { type: "string" } },
-          ownerUid: { type: "string" },
+          ownerUid: { type: "string", description: "Holds the owner's userCode, synced from trip_owner_user_master.owner." },
         },
       },
-      TripMaster: {
+      TripOwnerUserMaster: {
         type: "object",
+        description: "Ownership + role record for a trip. Path: trip_owner_user_master/{tripCode}.",
         properties: {
           tripCode: { type: "string" },
-          ownerUid: { type: "string" },
-          allowOthersToModify: { type: "boolean" },
+          owner: { type: "string", description: "userCode of the trip's creator." },
+          allowModification: { type: "boolean" },
+          users: {
+            type: "object",
+            description:
+              "Keyed by traveler display name (excluding the owner's own name). Each value is a 3-tuple [role, userCode, email].",
+            additionalProperties: {
+              type: "array",
+              items: {},
+              minItems: 3,
+              maxItems: 3,
+              description: "[role: 'owner'|'moderator'|'companion', userCode, email]",
+            },
+          },
+        },
+      },
+      UserSpecificTripList: {
+        type: "object",
+        description: "Per-user checklist/outfit snapshot for a trip. Path: user_specific_trip_list/{userCode}_{tripCode}.",
+        properties: {
+          userCode: { type: "string" },
+          tripCode: { type: "string" },
+          globalChecklist: { type: "array", items: {} },
+          outfitDetails: { type: "object" },
         },
       },
       UserDetails: {
@@ -63,34 +86,48 @@ export const openApiSpec = {
           email: { type: "string", nullable: true },
           name: { type: "string" },
           userCode: { type: "string", nullable: true },
-          subscription_tier: { type: "string" },
-          sub_start_date: { type: "string" },
-          sub_end_date: { type: "string" },
-          adTier: { type: "boolean" },
+          isActive: { type: "boolean", description: "Soft-delete flag. false means the account was deleted; can be reversed via /api/users/reactivate." },
         },
       },
       SubscriptionPlan: {
         type: "object",
+        description: "Path: subscription_types/{planId}.",
         properties: {
-          id: { type: "string" },
-          name: { type: "string" },
-          type: { type: "string" },
+          planId: { type: "string" },
+          planName: { type: "string" },
           durationYears: { type: "number" },
           originalPrice: { type: "number" },
           discountedPrice: { type: "number" },
           currency: { type: "string" },
+          description: { type: "string" },
+          badge: { type: "string" },
+          popular: { type: "boolean" },
+        },
+      },
+      UserSubscription: {
+        type: "object",
+        description: "A user's current subscription state (one doc per user). Path: user_subscriptions/{userCode}.",
+        properties: {
+          userCode: { type: "string" },
+          subscriptionCode: { type: "string", description: "Points at the most recent SubscriptionTransaction ledger entry." },
+          planId: { type: "string" },
+          effectiveStartDate: { type: "string", format: "date" },
+          effectiveEndDate: { type: "string", format: "date" },
+          isActive: { type: "boolean" },
         },
       },
       SubscriptionTransaction: {
         type: "object",
+        description: "Append-only purchase ledger, one entry per purchase event. Path: subscription_transaction_master/{subscriptionCode}.",
         properties: {
-          transactionId: { type: "string" },
-          uid: { type: "string" },
-          planId: { type: "string" },
+          subscriptionCode: { type: "string" },
+          userCode: { type: "string" },
           amountPaid: { type: "number" },
           currency: { type: "string" },
-          paymentMethod: { type: "string" },
+          planId: { type: "string" },
+          transactionId: { type: "string", description: "The payment processor's own transaction/payment id." },
           orderId: { type: "string" },
+          paymentMethod: { type: "string" },
           status: { type: "string", enum: ["completed", "pending", "refunded", "failed"] },
           createdAt: { type: "string" },
         },
@@ -104,6 +141,7 @@ export const openApiSpec = {
     { name: "Transactions" },
     { name: "Messages" },
     { name: "Payments" },
+    { name: "Uploads" },
     { name: "Geo" },
     { name: "Gemini" },
   ],
@@ -119,9 +157,9 @@ export const openApiSpec = {
     "/api/trips/owned/masters": {
       get: {
         tags: ["Trips"],
-        summary: "List trip_master records owned by the signed-in user",
+        summary: "List trip_owner_user_master records owned by the signed-in user",
         security: bearerAuth,
-        responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TripMaster" } } } } }, 401: errorResponse },
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/TripOwnerUserMaster" } } } } }, 401: errorResponse },
       },
     },
     "/api/trips/{code}": {
@@ -133,14 +171,14 @@ export const openApiSpec = {
       },
       put: {
         tags: ["Trips"],
-        summary: "Create/update a trip (owner, allowOthersToModify, or a guest-owned trip)",
+        summary: "Create/update a trip. Owner may always write; a joined companion/moderator may write only if the trip's allowModification is true AND their role permits it.",
         security: bearerAuth,
         requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/Trip" } } } },
         responses: { 200: { description: "OK" }, 403: errorResponse },
       },
       delete: {
         tags: ["Trips"],
-        summary: "Delete a trip (and its gclist/styling)",
+        summary: "Delete a trip (owner only). Also removes the trip's ownership record, every associated user's checklist/outfit data, and their trip association entry.",
         security: bearerAuth,
         responses: { 200: { description: "OK" }, 403: errorResponse },
       },
@@ -149,40 +187,44 @@ export const openApiSpec = {
       parameters: [{ name: "code", in: "path", required: true, schema: { type: "string" } }],
       get: {
         tags: ["Trips"],
-        summary: "Get a trip's ownership record (public)",
-        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/TripMaster" } } } }, 404: errorResponse },
+        summary: "Get a trip's ownership/role record (public)",
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/TripOwnerUserMaster" } } } }, 404: errorResponse },
       },
       put: {
         tags: ["Trips"],
-        summary: "Create/update a trip's ownership record. ownerUid is always server-decided.",
+        summary: "Create a new ownership record (anyone, becomes owner) or update an existing one (owner only). owner is always server-decided.",
         security: bearerAuth,
-        requestBody: { content: { "application/json": { schema: { type: "object", properties: { allowOthersToModify: { type: "boolean" } } } } } },
-        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/TripMaster" } } } }, 403: errorResponse },
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { allowModification: { type: "boolean" }, users: { type: "object" } } } } } },
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/TripOwnerUserMaster" } } } }, 403: errorResponse },
       },
       delete: {
         tags: ["Trips"],
-        summary: "Delete a trip's ownership record",
+        summary: "Delete a trip's ownership record (owner only)",
         security: bearerAuth,
         responses: { 200: { description: "OK" }, 403: errorResponse },
       },
     },
-    "/api/trips/{code}/gclist-styling": {
-      parameters: [{ name: "code", in: "path", required: true, schema: { type: "string" } }],
+    "/api/trips/{code}/user-trip-list/{userCode}": {
+      parameters: [
+        { name: "code", in: "path", required: true, schema: { type: "string" } },
+        { name: "userCode", in: "path", required: true, schema: { type: "string" } },
+      ],
       get: {
         tags: ["Trips"],
-        summary: "Get a trip's checklist + day-styling data (public)",
-        responses: { 200: { description: "OK" }, 404: errorResponse },
+        summary: "Get one user's checklist + outfit data for a trip. Callers may only read their own entry.",
+        security: bearerAuth,
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/UserSpecificTripList" } } } }, 403: errorResponse, 404: errorResponse },
       },
       put: {
         tags: ["Trips"],
-        summary: "Save a trip's checklist + day-styling data",
+        summary: "Save one user's checklist + outfit data for a trip. Callers may only write their own entry.",
         security: bearerAuth,
-        requestBody: { content: { "application/json": { schema: { type: "object", properties: { gclist: { type: "array", items: {} }, styling: { type: "object" } } } } } },
-        responses: { 200: { description: "OK" }, 403: errorResponse },
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { globalChecklist: { type: "array", items: {} }, outfitDetails: { type: "object" } } } } } },
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/UserSpecificTripList" } } } }, 403: errorResponse },
       },
       delete: {
         tags: ["Trips"],
-        summary: "Delete a trip's checklist + day-styling data",
+        summary: "Delete one user's checklist + outfit data for a trip. Callers may only remove their own entry.",
         security: bearerAuth,
         responses: { 200: { description: "OK" }, 403: errorResponse },
       },
@@ -199,14 +241,14 @@ export const openApiSpec = {
     "/api/users/me": {
       put: {
         tags: ["Users"],
-        summary: "Save your own profile. Subscription/tier fields are ignored — those only change via a verified payment.",
+        summary: "Save your own profile. isActive and other system-managed fields are ignored.",
         security: bearerAuth,
         requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/UserDetails" } } } },
         responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/UserDetails" } } } }, 401: errorResponse },
       },
       delete: {
         tags: ["Users"],
-        summary: "Delete your own account and owned data (preserves userCode/license in deleted_users for reactivation)",
+        summary: "Soft-delete your account: deletes owned trips and your own checklist/outfit/config data, then flips isActive to false on your user record (never removed, so /reactivate can restore it later). Does NOT delete the underlying Firebase Auth account.",
         security: bearerAuth,
         responses: { 200: { description: "OK" }, 401: errorResponse },
       },
@@ -239,9 +281,9 @@ export const openApiSpec = {
     "/api/users/reactivate": {
       post: {
         tags: ["Users"],
-        summary: "Reactivate a previously deleted account matching your verified email/uid",
+        summary: "Reactivate your own account if it was previously soft-deleted (isActive was false). Matched by your current Firebase session's uid, falling back to its verified email.",
         security: bearerAuth,
-        responses: { 200: { description: "OK, or null if no deleted account found" }, 401: errorResponse },
+        responses: { 200: { description: "OK, or null if the account wasn't soft-deleted" }, 401: errorResponse },
       },
     },
     "/api/users/config/{userCode}": {
@@ -250,9 +292,22 @@ export const openApiSpec = {
       put: { tags: ["Users"], summary: "Save user config", security: bearerAuth, responses: { 200: { description: "OK" } } },
     },
     "/api/users/tripcodes/{userCode}": {
-      parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
-      get: { tags: ["Users"], summary: "Get the trip codes registered under a user code", security: bearerAuth, responses: { 200: { description: "OK" } } },
-      put: { tags: ["Users"], summary: "Save the trip codes registered under a user code", security: bearerAuth, responses: { 200: { description: "OK" } } },
+      get: {
+        tags: ["Users"],
+        summary: "List the trip codes a user has an entry for (derived from user_specific_trip_list, not a separate stored list)",
+        security: bearerAuth,
+        parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "OK" } },
+      },
+    },
+    "/api/users/associations/{userCode}": {
+      get: {
+        tags: ["Users"],
+        summary: "Get a user's role on every trip they're associated with (owned or joined). Path: user_trip_association_master/{userCode}.",
+        security: bearerAuth,
+        parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "object", additionalProperties: { type: "string", enum: ["owner", "moderator", "companion"] } } } } } },
+      },
     },
     "/api/subscriptions": {
       get: {
@@ -275,7 +330,7 @@ export const openApiSpec = {
     "/api/transactions/by-user-code/{userCode}": {
       get: {
         tags: ["Transactions"],
-        summary: "List transactions for a user code",
+        summary: "List a user's subscription purchase history",
         security: bearerAuth,
         parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
         responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/SubscriptionTransaction" } } } } }, 401: errorResponse },
@@ -284,25 +339,17 @@ export const openApiSpec = {
     "/api/transactions/mine": {
       get: {
         tags: ["Transactions"],
-        summary: "List the signed-in user's own transactions",
+        summary: "List the signed-in user's own subscription purchase history",
         security: bearerAuth,
         responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/SubscriptionTransaction" } } } } }, 401: errorResponse },
-      },
-    },
-    "/api/transactions": {
-      post: {
-        tags: ["Transactions"],
-        summary: "Record a non-payment transaction receipt. Status can never be set to 'completed' here — only the Razorpay verify/webhook flow can do that.",
-        security: bearerAuth,
-        responses: { 200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/SubscriptionTransaction" } } } }, 401: errorResponse },
       },
     },
     "/api/messages": {
       post: {
         tags: ["Messages"],
         summary: "Submit a contact-us message (guests allowed)",
-        requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, email: { type: "string" }, subject: { type: "string" }, message: { type: "string" } }, required: ["message"] } } } },
-        responses: { 200: { description: "OK" } },
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" }, email: { type: "string" }, topic: { type: "string" }, message: { type: "string" }, userCode: { type: "string" } }, required: ["message"] } } } },
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "object", properties: { success: { type: "boolean" }, ticketId: { type: "string" } } } } } } },
       },
     },
     "/api/payments/razorpay/create-order": {
@@ -323,7 +370,9 @@ export const openApiSpec = {
                     amount: { type: "number" },
                     currency: { type: "string" },
                     keyId: { type: "string" },
-                    transactionId: { type: "string" },
+                    planName: { type: "string" },
+                    userName: { type: "string" },
+                    userEmail: { type: "string" },
                   },
                 },
               },
@@ -338,7 +387,7 @@ export const openApiSpec = {
     "/api/payments/razorpay/verify": {
       post: {
         tags: ["Payments"],
-        summary: "Verify a completed Razorpay checkout and apply the subscription (signature-checked)",
+        summary: "Verify a completed Razorpay checkout and apply the subscription (signature-checked). subscriptionCode is generated server-side at this point, not passed in.",
         security: bearerAuth,
         requestBody: {
           content: {
@@ -349,9 +398,8 @@ export const openApiSpec = {
                   razorpay_order_id: { type: "string" },
                   razorpay_payment_id: { type: "string" },
                   razorpay_signature: { type: "string" },
-                  transactionId: { type: "string" },
                 },
-                required: ["razorpay_order_id", "razorpay_payment_id", "razorpay_signature", "transactionId"],
+                required: ["razorpay_order_id", "razorpay_payment_id", "razorpay_signature"],
               },
             },
           },
@@ -365,6 +413,270 @@ export const openApiSpec = {
         summary: "Razorpay server-to-server webhook (payment.captured / order.paid). Verified via X-Razorpay-Signature, not a bearer token.",
         parameters: [{ name: "X-Razorpay-Signature", in: "header", required: true, schema: { type: "string" } }],
         responses: { 200: { description: "Received" }, 400: errorResponse },
+      },
+    },
+    "/api/payments/googleplay/verify": {
+      post: {
+        tags: ["Payments"],
+        summary:
+          "Verify a Google Play one-time product purchase (via @capgo/native-purchases on Android) against the Play Developer API, then apply the subscription. All 5 plans (1/2/3/5-year + lifetime) are modeled as Play one-time products, not subscriptions -- this app's own applyPurchasedPlan()/calculateEndDate() compute the multi-year expiry, same as for Razorpay.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  productId: { type: "string", description: "Must match a Play Console product ID, which in turn matches a planId (e.g. '3_year')." },
+                  purchaseToken: { type: "string" },
+                },
+                required: ["productId", "purchaseToken"],
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/submit": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "A traveler requests to join a trip. Written to trip_join_requests/{tripCode}.traveler_request.{requestId} inside a transaction alongside the approval-list fan-out (owner + every moderator get approval_to_grant; the requester gets approval_requested). Not yet called by the frontend, which still talks to Firestore directly for this feature (see src/lib/db.ts) -- built independently, ready for the eventual migration.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  tripCode: { type: "string" },
+                  tripTitle: { type: "string" },
+                  requesterEmail: { type: "string" },
+                  requesterName: { type: "string" },
+                  matchedTravelerName: { type: "string" },
+                  isNewTraveler: { type: "boolean" },
+                },
+                required: ["tripCode", "matchedTravelerName"],
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/invite": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "Trip owner invites a specific known user by email. Written to trip_join_requests/{tripCode}.owner_invite.{requestId} -- recipient gets approval_to_grant, the inviting owner gets approval_requested. Also sends an existing-account invite email (fire-and-forget, never blocks the response). Only the trip's owner may call this.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  tripCode: { type: "string" },
+                  tripTitle: { type: "string" },
+                  travelerName: { type: "string" },
+                  recipientUserCode: { type: "string" },
+                  recipientEmail: { type: "string" },
+                },
+                required: ["tripCode", "travelerName", "recipientUserCode"],
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse },
+      },
+    },
+    "/api/joinrequests/invite-unregistered": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "Trip owner invites an email with no matching Viadia account. Records the tripCode under unmapped_email_trip_association/{email} and sends a sign-up invite email. Once that email eventually signs up, /process-unmapped-signup automatically creates the real owner_invite. Only the trip's owner may call this.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  tripCode: { type: "string" },
+                  tripTitle: { type: "string" },
+                  recipientEmail: { type: "string" },
+                },
+                required: ["tripCode", "recipientEmail"],
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse },
+      },
+    },
+    "/api/joinrequests/process-unmapped-signup": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "Called once, right after a brand-new account finishes signing up. Creates a real owner_invite for every trip this email was previously invited to (via invite-unregistered) that's still 'planned' or 'active', then clears the pending list for this email regardless of how many trips qualified.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: { email: { type: "string" } },
+                required: ["email"],
+              },
+            },
+          },
+        },
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/{requestId}/approve": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "Owner/moderator approves a pending traveler_request -- performs the userCode/email mapping, seeds the requester's per-trip checklist, and triggers the multi-approver cleanup scan (fire-and-forget) afterward. Entry is kept with status='approved', not deleted -- removed only by the trip-completion/cancellation sweep. Requires approveChanges permission on this trip.",
+        security: bearerAuth,
+        parameters: [
+          { name: "tripCode", in: "path", required: true, schema: { type: "string" } },
+          { name: "requestId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/{requestId}/reject": {
+      post: {
+        tags: ["JoinRequests"],
+        summary: "Owner/moderator rejects a pending traveler_request. Entry is kept with status='rejected'. Requires approveChanges permission on this trip.",
+        security: bearerAuth,
+        parameters: [
+          { name: "tripCode", in: "path", required: true, schema: { type: "string" } },
+          { name: "requestId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/{requestId}/accept-invite": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "The invited user accepts an owner_invite -- grants actual access (user_trip_association_master + seeded checklist). Only the addressed recipient may call this.",
+        security: bearerAuth,
+        parameters: [
+          { name: "tripCode", in: "path", required: true, schema: { type: "string" } },
+          { name: "requestId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/{requestId}/decline-invite": {
+      post: {
+        tags: ["JoinRequests"],
+        summary:
+          "The invited user declines an owner_invite -- the placeholder traveler slot is removed immediately (unchanged, separate from request-record persistence). Entry is kept with status='rejected'. Only the addressed recipient may call this.",
+        security: bearerAuth,
+        parameters: [
+          { name: "tripCode", in: "path", required: true, schema: { type: "string" } },
+          { name: "requestId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/approval-to-grant": {
+      get: {
+        tags: ["JoinRequests"],
+        summary:
+          "Everything the caller currently needs to act on: pending traveler_request entries (only for trips where they have approveChanges permission) and any pending owner_invite addressed to them.",
+        security: bearerAuth,
+        responses: { 200: { description: "OK" }, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/approval-requested": {
+      get: {
+        tags: ["JoinRequests"],
+        summary: "Everything the caller is currently waiting on someone else's decision for -- their own pending join requests, or invites they've sent as an owner.",
+        security: bearerAuth,
+        responses: { 200: { description: "OK" }, 401: errorResponse },
+      },
+    },
+    "/api/uploads/presign": {
+      post: {
+        tags: ["Uploads"],
+        summary: "Get a short-lived presigned URL to upload a file directly to R2. Object key is server-decided and scoped under the caller's own userCode.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  purpose: { type: "string", enum: ["outfit-photo", "attachment"] },
+                  tripCode: { type: "string" },
+                  contentType: { type: "string", example: "image/jpeg" },
+                  declaredSizeBytes: { type: "number", description: "Optional soft check; real enforcement happens in /confirm." },
+                },
+                required: ["purpose", "contentType"],
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: "OK",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    key: { type: "string" },
+                    uploadUrl: { type: "string", description: "PUT the file bytes here directly (not through this API)." },
+                    publicUrl: { type: "string" },
+                    expiresInSeconds: { type: "number" },
+                  },
+                },
+              },
+            },
+          },
+          400: errorResponse,
+          401: errorResponse,
+        },
+      },
+    },
+    "/api/uploads/confirm": {
+      post: {
+        tags: ["Uploads"],
+        summary: "Confirm a direct-to-R2 upload finished. Verifies the object exists and is within the purpose's size limit, deleting it (and erroring) if not.",
+        security: bearerAuth,
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: { key: { type: "string" }, purpose: { type: "string", enum: ["outfit-photo", "attachment"] } },
+                required: ["key", "purpose"],
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: "OK", content: { "application/json": { schema: { type: "object", properties: { success: { type: "boolean" }, publicUrl: { type: "string" }, sizeBytes: { type: "number" } } } } } },
+          400: errorResponse,
+          401: errorResponse,
+          403: errorResponse,
+        },
+      },
+    },
+    "/api/uploads/object": {
+      delete: {
+        tags: ["Uploads"],
+        summary: "Delete a previously uploaded object. Caller must own it (key's userCode segment must match their own).",
+        security: bearerAuth,
+        parameters: [{ name: "key", in: "query", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse },
       },
     },
     "/api/nominatim/search": {

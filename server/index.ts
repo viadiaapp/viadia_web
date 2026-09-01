@@ -10,6 +10,9 @@ import messagesRoutes from "./routes/messages";
 import geoRoutes from "./routes/geo";
 import geminiRoutes from "./routes/gemini";
 import paymentsRoutes from "./routes/payments";
+import uploadsRoutes from "./routes/uploads";
+import googlePlayRoutes from "./routes/googleplay";
+import joinRequestsRoutes from "./routes/joinrequests";
 import { openApiSpec } from "./openapi";
 
 dotenv.config();
@@ -61,6 +64,9 @@ async function startServer() {
   app.use("/api/messages", messagesRoutes);
   app.use("/api/gemini", geminiRoutes);
   app.use("/api/payments", paymentsRoutes);
+  app.use("/api/uploads", uploadsRoutes);
+  app.use("/api/payments/googleplay", googlePlayRoutes);
+  app.use("/api/joinrequests", joinRequestsRoutes);
   app.use("/api", geoRoutes);
 
   // Safety net: any error forwarded via next(err) (see utils/asyncHandler) lands here instead of

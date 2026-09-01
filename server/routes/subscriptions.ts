@@ -11,16 +11,16 @@ router.get(
   "/",
   asyncHandler(async (_req, res) => {
     try {
-      const snap = await adminDb.collection("subscription_plans").get();
+      const snap = await adminDb.collection("subscription_types").get();
       if (!snap.empty) {
         const plans = snap.docs.map((d) => d.data());
-        plans.sort((a: any, b: any) => PLAN_ORDER.indexOf(a.id) - PLAN_ORDER.indexOf(b.id));
+        plans.sort((a: any, b: any) => PLAN_ORDER.indexOf(a.planId) - PLAN_ORDER.indexOf(b.planId));
         return res.json(plans);
       }
       // Seed Firestore with the default plans the first time this is called.
       const batch = adminDb.batch();
       for (const plan of DEFAULT_SUBSCRIPTION_PLANS) {
-        batch.set(adminDb.collection("subscription_plans").doc(plan.id), plan, { merge: true });
+        batch.set(adminDb.collection("subscription_types").doc(plan.planId), plan, { merge: true });
       }
       await batch.commit();
       res.json(DEFAULT_SUBSCRIPTION_PLANS);
@@ -40,8 +40,8 @@ router.put(
     if (!process.env.ADMIN_API_SECRET || secret !== process.env.ADMIN_API_SECRET) {
       return res.status(403).json({ error: "Forbidden." });
     }
-    const plan = { ...(req.body || {}), id: req.params.planId };
-    await adminDb.collection("subscription_plans").doc(req.params.planId).set(plan, { merge: true });
+    const plan = { ...(req.body || {}), planId: req.params.planId };
+    await adminDb.collection("subscription_types").doc(req.params.planId).set(plan, { merge: true });
     res.json({ success: true });
   })
 );

@@ -1,11 +1,16 @@
 import { Router } from "express";
-import { randomUUID } from "crypto";
 import { requireAuth } from "../middleware/auth";
 import { adminDb } from "../firebaseAdmin";
 import { createRazorpayOrder, getRazorpayKeyId, verifyPaymentSignature, verifyWebhookSignature } from "../services/razorpay";
 import { applyPurchasedPlan } from "../services/subscriptionService";
 
 const router = Router();
+
+// Lightweight, backend-internal bookkeeping only -- NOT part of the app's Firestore schema.
+// Tracks a Razorpay order from creation through to verification/webhook so /verify and /webhook
+// know which userCode + planId it was for. The actual, permanent ledger entry only gets written
+// by applyPurchasedPlan() once payment is confirmed (see services/subscriptionService.ts).
+const PENDING_ORDERS_COLLECTION = "razorpay_payment_orders";
 
 // Server decides the price — it is looked up from Firestore by planId, never trusted from the client.
 router.post("/razorpay/create-order", requireAuth, async (req, res) => {
@@ -15,43 +20,34 @@ router.post("/razorpay/create-order", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Missing planId." });
     }
 
-    const planSnap = await adminDb.collection("subscription_plans").doc(planId).get();
+    const planSnap = await adminDb.collection("subscription_types").doc(planId).get();
     if (!planSnap.exists) {
       return res.status(404).json({ error: "Unknown subscription plan." });
     }
     const plan = planSnap.data() as any;
 
-    const transactionId = `txn_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const userSnap = await adminDb.collection("users").doc(req.uid!).get();
+    const user = userSnap.exists ? userSnap.data()! : ({} as any);
+    if (!user.userCode) {
+      return res.status(400).json({ error: "This account has no userCode assigned yet." });
+    }
+
+    const receipt = `ord_${Date.now()}_${req.uid!.slice(0, 6)}`;
     const order = await createRazorpayOrder({
       amount: plan.discountedPrice,
       currency: plan.currency || "USD",
-      receipt: transactionId,
-      notes: { uid: req.uid!, planId },
+      receipt,
+      notes: { uid: req.uid!, userCode: user.userCode, planId },
     });
 
-    const userSnap = await adminDb.collection("users").doc(req.uid!).get();
-    const user = userSnap.exists ? userSnap.data()! : ({} as any);
-
     await adminDb
-      .collection("transactions")
-      .doc(transactionId)
+      .collection(PENDING_ORDERS_COLLECTION)
+      .doc(order.id)
       .set({
-        id: transactionId,
-        transactionId,
-        uid: req.uid,
-        userCode: user.userCode || null,
-        userEmail: user.email || req.userEmail || null,
-        userName: user.name || "Traveler",
-        planId: plan.id,
-        planName: plan.name,
-        planType: plan.type,
-        durationYears: plan.durationYears,
-        amountPaid: plan.discountedPrice,
-        originalPrice: plan.originalPrice,
-        currency: plan.currency,
-        paymentMethod: "razorpay",
         orderId: order.id,
-        status: "pending",
+        uid: req.uid,
+        userCode: user.userCode,
+        planId: plan.planId,
         createdAt: new Date().toISOString(),
       });
 
@@ -60,8 +56,7 @@ router.post("/razorpay/create-order", requireAuth, async (req, res) => {
       amount: order.amount,
       currency: order.currency,
       keyId: getRazorpayKeyId(),
-      transactionId,
-      planName: plan.name,
+      planName: plan.planName,
       userName: user.name || "Traveler",
       userEmail: user.email || req.userEmail || undefined,
     });
@@ -73,8 +68,8 @@ router.post("/razorpay/create-order", requireAuth, async (req, res) => {
 
 router.post("/razorpay/verify", requireAuth, async (req, res) => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, transactionId } = req.body || {};
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !transactionId) {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ error: "Missing payment verification fields." });
     }
 
@@ -87,25 +82,21 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Payment signature verification failed." });
     }
 
-    const txnSnap = await adminDb.collection("transactions").doc(transactionId).get();
-    if (!txnSnap.exists) {
-      return res.status(404).json({ error: "Transaction not found." });
+    const orderSnap = await adminDb.collection(PENDING_ORDERS_COLLECTION).doc(razorpay_order_id).get();
+    if (!orderSnap.exists) {
+      return res.status(404).json({ error: "Payment order not found." });
     }
-    const txn = txnSnap.data()!;
-    if (txn.uid !== req.uid) {
-      return res.status(403).json({ error: "Transaction does not belong to this account." });
-    }
-    if (txn.orderId !== razorpay_order_id) {
-      return res.status(400).json({ error: "Order mismatch." });
+    const pendingOrder = orderSnap.data()!;
+    if (pendingOrder.uid !== req.uid) {
+      return res.status(403).json({ error: "This payment order does not belong to this account." });
     }
 
     const result = await applyPurchasedPlan({
-      uid: req.uid!,
-      planId: txn.planId,
+      userCode: pendingOrder.userCode,
+      planId: pendingOrder.planId,
       orderId: razorpay_order_id,
       paymentId: razorpay_payment_id,
       paymentMethod: "razorpay",
-      transactionId,
     });
 
     res.json({ success: true, subscription: result });
@@ -116,7 +107,7 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
 });
 
 // Server-to-server confirmation — a second, authoritative path in case the browser closes before
-// the client ever calls /verify. Idempotent via applyPurchasedPlan's own transaction-status check.
+// the client ever calls /verify. Idempotent via applyPurchasedPlan's own orderId-based check.
 router.post("/razorpay/webhook", async (req, res) => {
   try {
     const signature = req.headers["x-razorpay-signature"] as string;
@@ -131,26 +122,21 @@ router.post("/razorpay/webhook", async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    const notes = payload.notes || {};
-    const uid = notes.uid;
-    const planId = notes.planId;
     const orderId = payload.order_id || payload.id;
-
-    if (!orderId || !uid || !planId) {
+    if (!orderId) {
       return res.status(200).json({ received: true });
     }
 
     if (event.event === "payment.captured" || event.event === "order.paid") {
-      const txnQuery = await adminDb.collection("transactions").where("orderId", "==", orderId).limit(1).get();
-      if (!txnQuery.empty) {
-        const txnDoc = txnQuery.docs[0];
+      const orderSnap = await adminDb.collection(PENDING_ORDERS_COLLECTION).doc(orderId).get();
+      if (orderSnap.exists) {
+        const pendingOrder = orderSnap.data()!;
         await applyPurchasedPlan({
-          uid,
-          planId,
+          userCode: pendingOrder.userCode,
+          planId: pendingOrder.planId,
           orderId,
           paymentId: payload.id,
           paymentMethod: "razorpay",
-          transactionId: txnDoc.id,
         });
       }
     }
