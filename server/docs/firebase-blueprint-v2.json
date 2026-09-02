@@ -1,0 +1,838 @@
+{
+  "entities": {
+    "SeriesCodeCounter": {
+      "title": "SeriesCodeCounter",
+      "description": "Singleton counter storing the next available SERIES_CODE letter and SERIES_NUMBER for userCode generation.",
+      "type": "object",
+      "properties": {
+        "SERIES_CODE": {
+          "type": "string",
+          "description": "The next available series code letter (e.g. 'A', 'B')."
+        },
+        "SERIES_NUMBER": {
+          "type": "number",
+          "description": "The next available series sequence integer (1 to 999999)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "SERIES_CODE",
+        "SERIES_NUMBER"
+      ]
+    },
+    "TicketCodeCounter": {
+      "title": "TicketCodeCounter",
+      "description": "Singleton counter storing the next available SERIES_CODE letter and SERIES_NUMBER for InboundMessage ticketId generation (format TKT + SERIES_CODE + 6-digit number, e.g. TKTA000001).",
+      "type": "object",
+      "properties": {
+        "SERIES_CODE": {
+          "type": "string",
+          "description": "The next available ticket series code letter (e.g. 'A', 'B'). Starts at 'A'."
+        },
+        "SERIES_NUMBER": {
+          "type": "number",
+          "description": "The next available ticket sequence integer (1 to 999999). Resets to 1 when SERIES_CODE rolls over."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "SERIES_CODE",
+        "SERIES_NUMBER"
+      ]
+    },
+    "UserDetails": {
+      "title": "UserDetails",
+      "description": "User core profile including unique sequential userCode for authenticated accounts. isActive doubles as the soft-delete flag \u2014 deactivating a user preserves their userCode and history for seamless reactivation, so there is no separate deleted-users archive.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique user ID from Firebase auth or local guest session."
+        },
+        "userCode": {
+          "type": "string",
+          "pattern": "^U[A-Z]+[0-9]{6}$",
+          "description": "Sequentially generated unique identifier used as config key (e.g. UA000001, UB000001)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user account was created."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Google email used for sign-in, or null for guests."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "User's preferred display name."
+        },
+        "country": {
+          "type": "string",
+          "description": "User's home country / region (e.g. United States, India, Germany)."
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether the account is active. Set to false on account deletion; flipping back to true reactivates the account with userCode and history intact. No separate deleted-users collection is maintained."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "name"
+      ]
+    },
+    "UserConfig": {
+      "title": "UserConfig",
+      "description": "Stores user preferences and global checklist keyed by userCode.",
+      "type": "object",
+      "properties": {
+        "userCode": {
+          "type": "string",
+          "pattern": "^U[A-Z]+[0-9]{6}$",
+          "description": "The userCode matching the UserDetails."
+        },
+        "globalChecklist": {
+          "type": "array",
+          "description": "Global checklist template across all travels."
+        },
+        "preferredCurrency": {
+          "type": "string",
+          "description": "User's default base currency (e.g. USD, EUR, GBP, INR)."
+        },
+        "preferredTempUnits": {
+          "type": "string",
+          "enum": [
+            "C",
+            "F"
+          ],
+          "description": "User's preferred temperature measurement unit."
+        },
+        "preferredDistanceUnits": {
+          "type": "string",
+          "enum": [
+            "km",
+            "miles"
+          ],
+          "description": "User's preferred distance measurement unit."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userCode",
+        "globalChecklist"
+      ]
+    },
+    "SubscriptionPlan": {
+      "title": "SubscriptionPlan",
+      "description": "Available Pro ad-free subscription plans with duration, pricing, and currency. (Collection name: subscriptionTypes)",
+      "type": "object",
+      "properties": {
+        "planId": {
+          "type": "string",
+          "description": "Unique plan ID (e.g., 1_year, 2_year, 3_year, 5_year, lifetime)."
+        },
+        "planName": {
+          "type": "string",
+          "description": "Human-friendly plan name (e.g., 1 Year Pro, Lifetime Pass)."
+        },
+        "durationYears": {
+          "type": "number",
+          "description": "Duration in years (99 for lifetime)."
+        },
+        "originalPrice": {
+          "type": "number",
+          "description": "Base price before discount."
+        },
+        "discountedPrice": {
+          "type": "number",
+          "description": "Active promotional or discounted price."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency code (e.g., USD)."
+        },
+        "badge": {
+          "type": "string",
+          "description": "Optional badge label (e.g., POPULAR, BEST VALUE)."
+        }
+      },
+      "required": [
+        "planId",
+        "planName",
+        "durationYears",
+        "originalPrice",
+        "discountedPrice",
+        "currency"
+      ]
+    },
+    "UserSubscription": {
+      "title": "UserSubscription",
+      "description": "Tracks a user's current subscription state, keyed by userCode. Separated out from UserDetails so the user profile doc doesn't carry billing state directly.",
+      "type": "object",
+      "properties": {
+        "userCode": {
+          "type": "string",
+          "description": "The userCode this subscription belongs to."
+        },
+        "subscriptionCode": {
+          "type": "string",
+          "description": "Unique identifier for this subscription instance; referenced by SubscriptionTransaction."
+        },
+        "planId": {
+          "type": "string",
+          "description": "The currently active plan ID (references SubscriptionPlan)."
+        },
+        "effectiveStartDate": {
+          "type": "string",
+          "description": "ISO date string when the current subscription period begins."
+        },
+        "effectiveEndDate": {
+          "type": "string",
+          "description": "ISO date string when the current subscription period expires."
+        },
+        "isActive": {
+          "type": "boolean",
+          "description": "Whether the subscription is currently active."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "userCode",
+        "subscriptionCode",
+        "planId",
+        "effectiveStartDate",
+        "effectiveEndDate",
+        "isActive"
+      ]
+    },
+    "SubscriptionTransaction": {
+      "title": "SubscriptionTransaction",
+      "description": "Ledger of successful membership purchase transactions, keyed by subscriptionCode. (Collection name: subscriptionTransactionMaster). Note: unlike the prior version, this no longer denormalizes user/plan display fields (userName, userEmail, planName, etc.) \u2014 join via userCode/planId when displaying history.",
+      "type": "object",
+      "properties": {
+        "subscriptionCode": {
+          "type": "string",
+          "description": "The subscriptionCode this transaction belongs to (references UserSubscription)."
+        },
+        "userCode": {
+          "type": "string",
+          "description": "User code of the purchaser."
+        },
+        "amountPaid": {
+          "type": "number",
+          "description": "Actual monetary amount charged."
+        },
+        "currency": {
+          "type": "string",
+          "description": "Currency of transaction (e.g. USD)."
+        },
+        "planId": {
+          "type": "string",
+          "description": "Purchased plan ID (references SubscriptionPlan)."
+        },
+        "transactionId": {
+          "type": "string",
+          "description": "Unique transaction identification string."
+        },
+        "orderId": {
+          "type": "string",
+          "description": "External payment gateway order reference ID."
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Payment gateway or billing channel used (e.g., google_play, apple_pay)."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "pending",
+            "refunded",
+            "failed"
+          ],
+          "description": "Status of the purchase transaction."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the transaction was completed."
+        }
+      },
+      "required": [
+        "subscriptionCode",
+        "userCode",
+        "amountPaid",
+        "currency",
+        "planId",
+        "transactionId",
+        "status",
+        "createdAt"
+      ]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Full travel planner itinerary, companion log, expenses, and schedule details. (Collection name: tripMaster). Does not carry the shared/global checklist snapshot \u2014 that copy lives in UserSpecificTripList instead.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique random ID for the trip instance."
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{6}$",
+          "description": "The 6-character alphanumeric share code and document ID."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Title of the travel adventure."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "High-level summary of the trip."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "active",
+            "completed"
+          ]
+        },
+        "startDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "endDate": {
+          "type": "string",
+          "format": "date"
+        },
+        "countries": {
+          "type": "array"
+        },
+        "miles": {
+          "type": "number"
+        },
+        "travelers": {
+          "type": "array",
+          "description": "Array of canonical travelerIds (see TripOwnerUserMaster.users for what a travelerId is), not display names -- includes the owner's own travelerId (== ownerTravelerId below) alongside every other traveler's. A lightweight, trip-local mirror of TripOwnerUserMaster.users's keys, kept here so UI surfaces like trip cards can show a quick traveler count/avatars without a separate master-doc fetch."
+        },
+        "travelerNames": {
+          "type": "object",
+          "description": "Map of travelerId to display name, e.g. { \"T-A1B2C3\": \"Sharu\" }. Trip-local mirror of TripOwnerUserMaster.users[id].displayName, kept here so components displaying expenses/splits/itinerary don't need to cross-reference the master doc just to resolve a name for display. This is the single field renamed/repurposed from what was previously Trip.travelerEmails -- email itself no longer lives on the trip document at all, only on the TripOwnerUserMaster roster record (single source of truth for that security-relevant field)."
+        },
+        "ownerTravelerId": {
+          "type": "string",
+          "description": "The owner's own canonical travelerId. Mirrors TripOwnerUserMaster.ownerTravelerId; kept on the trip document too so the trip-save flow can read/write it without an extra master fetch on every pass."
+        },
+        "timeline": {
+          "type": "array"
+        },
+        "expenses": {
+          "type": "array"
+        },
+        "checklist": {
+          "type": "array",
+          "description": "Checklist specific to this trip instance (does NOT contain the global travel checklist)."
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "code",
+        "startDate",
+        "endDate",
+        "travelers",
+        "timeline",
+        "expenses",
+        "checklist"
+      ]
+    },
+    "TripTransactionMaster": {
+      "title": "TripTransactionMaster",
+      "description": "Incremental change log for a trip, keyed by tripCode. Records only the created/updated/deleted deltas made to the Trip document, rather than full snapshots \u2014 intended for sync/offline-merge and audit history.",
+      "type": "object",
+      "properties": {
+        "tripCode": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{6}$",
+          "description": "The trip this change log entry belongs to."
+        },
+        "changeId": {
+          "type": "number",
+          "description": "Sequential integer identifying this change entry, scoped to the tripCode (starts at 1 per trip, increments with each change)."
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "created",
+            "updated",
+            "deleted"
+          ],
+          "description": "The type of change applied."
+        },
+        "fieldPath": {
+          "type": "string",
+          "description": "Dot-path of the field/section within the Trip document that changed (e.g. 'timeline.3', 'expenses.7')."
+        },
+        "newValue": {
+          "description": "The new value at fieldPath after this change. Omitted/null for deletions."
+        },
+        "changedBy": {
+          "type": "string",
+          "description": "userCode of the person who made the change."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "tripCode",
+        "changeId",
+        "operation",
+        "createdAt"
+      ]
+    },
+    "UserSpecificTripList": {
+      "title": "UserSpecificTripList",
+      "description": "Path: user_specific_trip_list/{userCode}_{tripCode} -- a flat collection with a composite doc ID, not a subcollection. userCode and tripCode are stored as fields (not just baked into the ID) because Firestore can only query/filter on actual field values -- listing 'every trip this user is part of' requires a where('userCode','==',...) query, which needs the field to exist on the document.",
+      "type": "object",
+      "properties": {
+        "userCode": {
+          "type": "string"
+        },
+        "tripCode": {
+          "type": "string"
+        },
+        "globalChecklist": {
+          "type": "array",
+          "description": "Snapshot copy of UserConfig.globalChecklist at creation/join time."
+        },
+        "outfitDetails": {
+          "type": "object",
+          "description": "Written by the Outfits section in Checklist.tsx."
+        }
+      },
+      "required": [
+        "userCode",
+        "tripCode"
+      ]
+    },
+    "TripOwnerUserMaster": {
+      "title": "TripOwnerUserMaster",
+      "description": "Global directory mapping unique trip codes to their creator, modification permission, and collaborator list. (Collection name: tripOwnerUserMaster). Ownership is now tracked by userCode (rather than uid) for consistency with the rest of the schema, and collaborators are tracked individually rather than via a single open/closed flag.",
+      "type": "object",
+      "properties": {
+        "tripCode": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{6}$"
+        },
+        "owner": {
+          "type": "string",
+          "description": "The userCode of the user who created this trip."
+        },
+        "ownerTravelerId": {
+          "type": "string",
+          "description": "The owner's own canonical travelerId (see the `users` field below for what a travelerId is). Deliberately NOT a key in `users` -- permission checks throughout the app compare `owner` (the userCode) directly, and the owner's role is implicit/fixed rather than assignable like a companion's. This field exists purely so expenses/splits can reference the owner via a travelerId the same way as any other traveler, with no special-casing required at the point of use."
+        },
+        "allowModification": {
+          "type": "boolean",
+          "description": "Whether other users or guests are allowed to modify this trip."
+        },
+        "users": {
+          "type": "object",
+          "description": "Map of each traveler's canonical travelerId (format `T-XXXXXX`, e.g. `T-A1B2C3`) to a { role, userCode, email, displayName } record, e.g. { \"T-A1B2C3\": { \"role\": \"companion\", \"userCode\": \"UA000002\", \"email\": \"def@gmail.com\", \"displayName\": \"Sharu\" } }. A travelerId is minted once when a traveler is added (by the owner typing a name, or for the owner themself at trip creation via ownerTravelerId above) and never changes again, regardless of whether they ever link a real account -- this is deliberate: expenses/splits reference the travelerId, not the name, so a later display-name change (e.g. a placeholder later matched to a real joining user with a different name) never requires touching historical records, and two different people can never collide on the same key the way two identical display names could. Excludes the owner (see ownerTravelerId above). role defaults to 'companion' for every traveler added at trip creation or via join; userCode/email are empty until this traveler links a real account, and may remain empty forever -- a permanent placeholder guest, tracked purely for expense-splitting purposes and never expected to install the app, is a fully supported state, not a transient one. displayName mirrors Trip.travelerNames[travelerId]. The owner can change a traveler's role to 'moderator' from Trip Settings, which also updates user_trip_association_master if that traveler is already userCode-mapped."
+        }
+      },
+      "required": [
+        "tripCode",
+        "owner",
+        "allowModification"
+      ]
+    },
+    "InboundMessage": {
+      "title": "InboundMessage",
+      "description": "Feedback, support, or contact messages submitted by users through the app. Keyed by a generated ticketId (format TKT + series letter + 6-digit number, e.g. TKTA000001), backed by the TicketCodeCounter singleton.",
+      "type": "object",
+      "properties": {
+        "ticketId": {
+          "type": "string",
+          "pattern": "^TKT[A-Z]+[0-9]{6}$",
+          "description": "Sequentially generated ticket identifier, e.g. TKTA000001, TKTA000002, ... rolling to TKTB000001 after 999999."
+        },
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "topic": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "userCode": {
+          "type": "string",
+          "description": "Only present for signed-in users; omitted for anonymous/guest submissions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "isResolved": {
+          "type": "boolean",
+          "description": "Indicates whether the inbound message has been resolved."
+        },
+        "response": {
+          "type": "string",
+          "description": "Support response message sent back to the user."
+        },
+        "resolvedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the ticket was marked resolved."
+        }
+      },
+      "required": [
+        "ticketId",
+        "message",
+        "createdAt"
+      ]
+    },
+    "RolePermissions": {
+      "title": "RolePermissions",
+      "description": "Static, never-changing permission set for a trip role. One doc per role at role_master/{role} (role = 'owner' | 'moderator' | 'companion'). Values: owner {allowModify:true, approveChanges:true, deleteTrip:true}, moderator {allowModify:true, approveChanges:true, deleteTrip:false}, companion {allowModify:true, approveChanges:false, deleteTrip:false}. A joined user (moderator/companion) may actually modify a trip only if BOTH this role's allowModify AND TripOwnerUserMaster.allowModification are true \u2014 see the app-level isTripReadOnly() check in App.tsx. Client code may also read these off a local constant instead of Firestore since this table never changes.",
+      "type": "object",
+      "properties": {
+        "allowModify": {
+          "type": "boolean",
+          "description": "Whether this role can edit trip content (itinerary, expenses, checklist)."
+        },
+        "approveChanges": {
+          "type": "boolean",
+          "description": "Whether this role can approve changes proposed by other collaborators."
+        },
+        "deleteTrip": {
+          "type": "boolean",
+          "description": "Whether this role can delete the entire trip."
+        }
+      },
+      "required": [
+        "allowModify",
+        "approveChanges",
+        "deleteTrip"
+      ]
+    },
+    "UserTripAssociationMaster": {
+      "title": "UserTripAssociationMaster",
+      "description": "Path: user_trip_association_master/{userCode}. Body is a flat map of tripCode -> role. This is the authoritative list used to populate the All Trips tab for a user (every trip they created or joined), and to decide whether a trip card shows a Delete button (role === 'owner') or an Exit button (any other role).",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "moderator",
+          "companion"
+        ],
+        "description": "Keyed by tripCode; value is this user's role on that trip."
+      }
+    },
+    "TripJoinRequest": {
+      "title": "TripJoinRequest",
+      "description": "Path: trip_join_requests/{tripCode} -- one document per trip (not per request), holding two maps keyed by requestId: owner_invite and traveler_request. This replaces the earlier flat trip_join_requests/{requestId} design specifically so 'all requests for this trip' is a single document read instead of a query. Writes here must go through a Firestore transaction alongside UserTripApprovalList updates (see that entity) so a request never exists without its corresponding approval-list entries, or vice versa. Multi-approver cleanup (removing tripCode from approval_to_grant once no traveler_request entries remain pending) is handled by a backend fire-and-forget scan triggered after every approve/reject action -- not a client-side check. Resolved entries (approved/rejected, accepted/declined) are kept in place, not deleted immediately -- see each entry's status field for the full rule and the one related-but-separate exception (placeholder traveler slot cleanup on owner_invite decline, which still happens immediately). This collection is swept (all entries for a tripCode removed) when that trip's status becomes 'completed' or 'cancelled'.",
+      "type": "object",
+      "properties": {
+        "tripCode": {
+          "type": "string",
+          "description": "Same value as the document ID, denormalized here for clarity when the doc is read as a whole."
+        },
+        "owner_invite": {
+          "type": "object",
+          "description": "Keyed by requestId.",
+          "additionalProperties": {
+            "type": "object",
+            "description": "A single request/invite record. direction is implicit from which map it lives under (owner_invite vs traveler_request) and tripCode is implicit from the parent document's ID -- neither is stored as a field to avoid redundancy.",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "description": "Same value as this entry's map key, denormalized here too so a single extracted entry is self-describing."
+              },
+              "tripTitle": {
+                "type": "string",
+                "description": "Denormalized for display without an extra trip fetch."
+              },
+              "requesterUserCode": {
+                "type": "string",
+                "description": "For traveler_request: the person asking to join. For owner_invite: the inviting owner."
+              },
+              "requesterEmail": {
+                "type": "string"
+              },
+              "requesterName": {
+                "type": "string"
+              },
+              "matchedTravelerId": {
+                "type": "string",
+                "description": "The canonical travelerId (see TripOwnerUserMaster.users) this request/invite resolves to. For a new traveler (isNewTraveler=true) this is minted fresh at submit time. For an existing placeholder being matched, this is that placeholder's already-existing ID, passed through unchanged -- this is the field approve/accept actually write into the roster and Trip.travelers with, specifically so matching an existing placeholder is purely a userCode/email/displayName update on the same record, never a rename, and never at risk of colliding with a different traveler who happens to share a display name."
+              },
+              "matchedTravelerName": {
+                "type": "string",
+                "description": "Display-only: the name shown/confirmed at request time (either the selected placeholder's current display name, or the requester's own account name for a new-traveler request). Never used as a roster key -- see matchedTravelerId for that. For owner_invite this is typically the invited email itself, at least until the recipient accepts and their real display name overwrites it."
+              },
+              "isNewTraveler": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "rejected"
+                ],
+                "description": "Confirmed: entries under BOTH owner_invite and traveler_request are kept in place with status='approved'/'rejected' after resolution, for all four outcomes (traveler_request approved, traveler_request rejected, owner_invite accepted, owner_invite declined) -- none of them delete the request record immediately anymore, for consistency. Entries are removed only by the trip-completion/cancellation sweep (see the TripJoinRequest entity description). IMPORTANT DISTINCTION: this only concerns the request RECORD's lifecycle. The separate, pre-existing behavior where declining an owner_invite also removes the placeholder traveler slot from Trip.travelers/travelerNames and trip_owner_user_master.users is UNCHANGED and still happens immediately on decline -- that's a trip-roster-integrity concern (not leaving a broken, permanently-unusable traveler slot in the trip), separate from whether the request record itself persists for history."
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "resolvedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "resolvedBy": {
+                "type": "string"
+              },
+              "recipientUserCode": {
+                "type": "string",
+                "description": "Only set for entries under owner_invite. The one person allowed to accept/decline."
+              }
+            },
+            "required": [
+              "requestId",
+              "requesterUserCode",
+              "matchedTravelerId",
+              "matchedTravelerName",
+              "isNewTraveler",
+              "status",
+              "createdAt"
+            ]
+          }
+        },
+        "traveler_request": {
+          "type": "object",
+          "description": "Keyed by requestId.",
+          "additionalProperties": {
+            "type": "object",
+            "description": "A single request/invite record. direction is implicit from which map it lives under (owner_invite vs traveler_request) and tripCode is implicit from the parent document's ID -- neither is stored as a field to avoid redundancy.",
+            "properties": {
+              "requestId": {
+                "type": "string",
+                "description": "Same value as this entry's map key, denormalized here too so a single extracted entry is self-describing."
+              },
+              "tripTitle": {
+                "type": "string",
+                "description": "Denormalized for display without an extra trip fetch."
+              },
+              "requesterUserCode": {
+                "type": "string",
+                "description": "For traveler_request: the person asking to join. For owner_invite: the inviting owner."
+              },
+              "requesterEmail": {
+                "type": "string"
+              },
+              "requesterName": {
+                "type": "string"
+              },
+              "matchedTravelerId": {
+                "type": "string",
+                "description": "The canonical travelerId (see TripOwnerUserMaster.users) this request/invite resolves to. For a new traveler (isNewTraveler=true) this is minted fresh at submit time. For an existing placeholder being matched, this is that placeholder's already-existing ID, passed through unchanged -- this is the field approve/accept actually write into the roster and Trip.travelers with, specifically so matching an existing placeholder is purely a userCode/email/displayName update on the same record, never a rename, and never at risk of colliding with a different traveler who happens to share a display name."
+              },
+              "matchedTravelerName": {
+                "type": "string",
+                "description": "Display-only: the name shown/confirmed at request time (either the selected placeholder's current display name, or the requester's own account name for a new-traveler request). Never used as a roster key -- see matchedTravelerId for that. For owner_invite this is typically the invited email itself, at least until the recipient accepts and their real display name overwrites it."
+              },
+              "isNewTraveler": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "approved",
+                  "rejected"
+                ],
+                "description": "Confirmed: entries under BOTH owner_invite and traveler_request are kept in place with status='approved'/'rejected' after resolution, for all four outcomes (traveler_request approved, traveler_request rejected, owner_invite accepted, owner_invite declined) -- none of them delete the request record immediately anymore, for consistency. Entries are removed only by the trip-completion/cancellation sweep (see the TripJoinRequest entity description). IMPORTANT DISTINCTION: this only concerns the request RECORD's lifecycle. The separate, pre-existing behavior where declining an owner_invite also removes the placeholder traveler slot from Trip.travelers/travelerNames and trip_owner_user_master.users is UNCHANGED and still happens immediately on decline -- that's a trip-roster-integrity concern (not leaving a broken, permanently-unusable traveler slot in the trip), separate from whether the request record itself persists for history."
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "resolvedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "resolvedBy": {
+                "type": "string"
+              },
+              "recipientUserCode": {
+                "type": "string",
+                "description": "Only set for entries under owner_invite. The one person allowed to accept/decline."
+              }
+            },
+            "required": [
+              "requestId",
+              "requesterUserCode",
+              "matchedTravelerId",
+              "matchedTravelerName",
+              "isNewTraveler",
+              "status",
+              "createdAt"
+            ]
+          }
+        }
+      },
+      "required": [
+        "tripCode"
+      ]
+    },
+    "UserTripApprovalList": {
+      "title": "UserTripApprovalList",
+      "description": "Path: user_trip_approval_list/{userCode} -- one document per user, denormalized specifically to make 'which trips need my attention' and 'which trips am I waiting on' each a single document read, with no query needed. This is a fan-out-on-write index over TripJoinRequest, not a source of truth on its own -- the actual request data always lives in TripJoinRequest. The consistent rule across both directions: whoever needs to ACT gets tripCode in approval_to_grant; whoever is WAITING on someone else's decision gets it in approval_requested. Traveler requests to join: requester gets approval_requested, the trip's owner + every moderator each get approval_to_grant. Owner invites someone: the invitee gets approval_to_grant, the owner who sent it gets approval_requested. All writes here happen inside the same Firestore transaction as the corresponding TripJoinRequest write (see that entity's description) -- never as a separate, later write.",
+      "type": "object",
+      "properties": {
+        "userCode": {
+          "type": "string"
+        },
+        "approval_to_grant": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Trip codes with at least one pending request/invite this user currently needs to review and act on."
+        },
+        "approval_requested": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Trip codes where this user is currently waiting on someone else's decision (their own join request, or an invite they sent)."
+        }
+      },
+      "required": [
+        "userCode",
+        "approval_to_grant",
+        "approval_requested"
+      ]
+    },
+    "UnmappedEmailTripAssociation": {
+      "title": "UnmappedEmailTripAssociation",
+      "description": "Path: unmapped_email_trip_association/{normalizedEmail} -- one document per email address (lowercased, trimmed), tracking which trips that email was invited to before it had a Viadia account. Written by the backend's addUnmappedEmailTripAssociation whenever an owner invites an email with no matching account (see routes/joinrequests.ts's /invite-unregistered endpoint), which also sends a sign-up invite email via services/emailService.ts. Consumed exactly once: when that email address completes its very first sign-up, the frontend calls the backend's /process-unmapped-signup endpoint, which reads this document, creates a real owner_invite for every listed trip code still in 'planned' or 'active' status (skipping 'completed'/'cancelled' ones), and then deletes the whole document -- regardless of how many trip codes actually qualified. This is a one-time process, not something that keeps retrying skipped entries later. Only ever created/read/deleted server-side (Admin SDK) -- there is no frontend/client-SDK equivalent, unlike TripJoinRequest and UserTripApprovalList, which exist independently on both sides. This collection genuinely requires server-side execution: it creates invites on behalf of other trips' owners at signup time, which a signing-up user's own client should not have direct Firestore write access to do.",
+      "type": "object",
+      "properties": {
+        "tripCodes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Trip codes this email has been invited to but hasn't accepted (or even seen) yet, since it had no account to notify. arrayUnion on write, so re-inviting the same email to a trip it's already pending on is a safe no-op."
+        }
+      },
+      "required": [
+        "tripCodes"
+      ]
+    }
+  },
+  "firestore": {
+    "/series_code/CURRENT": {
+      "schema": "SeriesCodeCounter",
+      "description": "Singleton counter storing the next available SERIES_CODE and SERIES_NUMBER for userCode generation."
+    },
+    "/ticket_code/CURRENT": {
+      "schema": "TicketCodeCounter",
+      "description": "Singleton counter storing the next available SERIES_CODE and SERIES_NUMBER for InboundMessage ticketId generation."
+    },
+    "/users/{uid}": {
+      "schema": "UserDetails",
+      "description": "Collection of user identities and generated sequence codes. isActive doubles as the soft-delete flag."
+    },
+    "/user_configs/{userCode}": {
+      "schema": "UserConfig",
+      "description": "Collection of user preferences and global checklist data indexed by userCode."
+    },
+    "/subscription_types/{planId}": {
+      "schema": "SubscriptionPlan",
+      "description": "Configurable collection of available Pro membership tiers and pricing options."
+    },
+    "/user_subscriptions/{userCode}": {
+      "schema": "UserSubscription",
+      "description": "Current subscription state per user, keyed by userCode."
+    },
+    "/subscription_transaction_master/{subscriptionCode}": {
+      "schema": "SubscriptionTransaction",
+      "description": "Ledger of user plan purchases and membership billing transactions, keyed by subscriptionCode."
+    },
+    "/trip_master/{tripCode}": {
+      "schema": "Trip",
+      "description": "Main travel document containing schedules, expenses, and timeline, keyed by uppercase trip code."
+    },
+    "/trip_transaction_master/{tripCode}/changes/{changeId}": {
+      "schema": "TripTransactionMaster",
+      "description": "Incremental change log (created/updated/deleted deltas) for a trip, keyed by tripCode. The parent doc trip_transaction_master/{tripCode} also holds a nextChangeId counter field (not part of the TripTransactionMaster schema itself), incremented transactionally each time logTripChange() writes a new entry, so changeId stays sequential per trip with no padding."
+    },
+    "/trip_owner_user_master/{tripCode}": {
+      "schema": "TripOwnerUserMaster",
+      "description": "Dictionary of trip code to owning userCode, modification permission, and collaborator map."
+    },
+    "/inbound_messages/{ticketId}": {
+      "schema": "InboundMessage",
+      "description": "Collection of user feedback, contact us, and support inquiries, keyed by generated ticketId."
+    },
+    "/role_master/{role}": {
+      "schema": "RolePermissions",
+      "description": "Static permission table. Exactly 3 docs: owner, moderator, companion. Never written to at runtime."
+    },
+    "/user_trip_association_master/{userCode}": {
+      "schema": "UserTripAssociationMaster",
+      "description": "One doc per user, mapping every tripCode they're associated with to their role on that trip. Written on trip creation (role: owner), trip join (role: companion), and cleaned up on trip deletion / user exit."
+    },
+    "/user_specific_trip_list/{userCode}_{tripCode}": {
+      "schema": "UserSpecificTripList",
+      "description": "One doc per (userCode, tripCode) pair, using a composite doc ID rather than a subcollection."
+    },
+    "/trip_join_requests/{tripCode}": {
+      "schema": "TripJoinRequest",
+      "description": "One doc per trip, holding both owner_invite and traveler_request maps keyed by requestId. See TripJoinRequest entity description for the transaction/cleanup requirements."
+    },
+    "/user_trip_approval_list/{userCode}": {
+      "schema": "UserTripApprovalList",
+      "description": "One doc per user. Fan-out-on-write index over TripJoinRequest -- see UserTripApprovalList entity description."
+    },
+    "/unmapped_email_trip_association/{normalizedEmail}": {
+      "schema": "UnmappedEmailTripAssociation",
+      "description": "One doc per email address. See UnmappedEmailTripAssociation entity description for the full write/consume/delete lifecycle."
+    }
+  }
+}

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="x-apple-disable-message-reformatting">
+<title>You've been invited to plan a trip on Viadia</title>
+<style>
+body{margin:0;padding:0;background:#f5f7fb;font-family:Arial,Helvetica,sans-serif;color:#1f2937}
+table{border-collapse:collapse;border-spacing:0} img{border:0;display:block;max-width:100%}a{text-decoration:none}
+.wrapper{width:100%;background:#f5f7fb;padding:40px 15px}
+.container{width:100%;max-width:620px;margin:0 auto;background:#fff;border-radius:24px;overflow:hidden}
+.header{padding:34px 30px 18px;text-align:center}.logo{width:145px;height:auto;margin:0 auto}
+.hero{padding:20px 45px 12px;text-align:center}
+.hero-title{margin:0 0 16px;color:#172554;font-size:32px;line-height:40px;font-weight:700;letter-spacing:-.5px}
+.hero-title .brand{color:#4f46e5}.hero-text{max-width:480px;margin:0 auto;color:#64748b;font-size:17px;line-height:27px}
+.intro{padding:18px 50px 15px;text-align:center}.intro-text{max-width:500px;margin:0 auto;color:#475569;font-size:16px;line-height:26px}
+.trip-card{margin:12px 45px 20px;padding:18px 22px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;text-align:center}
+.trip-card-label{margin:0 0 4px;color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.trip-card-title{margin:0;color:#1e293b;font-size:20px;font-weight:700}
+.note{margin:0 45px 20px;padding:14px 18px;background:#eef2ff;border-radius:12px;color:#4338ca;font-size:14px;line-height:22px;text-align:center}
+.cta-section{padding:15px 40px 42px;text-align:center}.cta{display:inline-block;padding:15px 32px;background:#4f46e5;border-radius:12px;color:#fff!important;font-size:16px;font-weight:700}.cta-subtext{margin:14px 0 0;color:#94a3b8;font-size:13px;line-height:20px}
+.footer{padding:28px 30px;background:#f8fafc;text-align:center}.footer-logo{width:190px;height:auto;margin:0 auto 14px}.footer-text{margin:0;color:#94a3b8;font-size:12px;line-height:19px}.footer-links{margin-top:13px}.footer-links a{margin:0 7px;color:#64748b;font-size:12px}
+@media only screen and (max-width:600px){
+.wrapper{padding:15px 8px}.container{border-radius:18px}.header{padding:28px 20px 12px}.hero{padding:20px 25px 10px}.hero-title{font-size:27px;line-height:34px}.hero-text{font-size:16px;line-height:25px}.intro{padding:12px 25px 15px}.trip-card{margin-left:25px;margin-right:25px}.note{margin-left:25px;margin-right:25px}.cta-section{padding-left:25px;padding-right:25px}.footer-logo{width:170px}
+}
+</style>
+</head>
+<body>
+<table role="presentation" width="100%" class="wrapper"><tr><td align="center">
+<table role="presentation" width="100%" class="container">
+
+<tr><td class="header">
+<a href="https://viadia.in"><img src="https://viadia.in/assets/email/viadia-name.png" alt="Viadia" class="logo"></a>
+</td></tr>
+
+<tr><td class="hero">
+<h1 class="hero-title">You're invited! 🎉<br>Plan a trip on <span class="brand">Viadia</span></h1>
+<p class="hero-text"><strong>{{INVITER_NAME}}</strong> wants you along for the next adventure.</p>
+</td></tr>
+
+<tr><td class="intro">
+<p class="intro-text">Viadia brings your plans, places, bookings, expenses and travel companions together in one happy place.</p>
+</td></tr>
+
+<tr><td class="trip-card">
+<p class="trip-card-label">Trip</p>
+<p class="trip-card-title">{{TRIP_TITLE}}</p>
+</td></tr>
+
+<tr><td class="note">You don't have a Viadia account yet -- sign up with this email address and your invite will be waiting for you.</td></tr>
+
+<tr><td class="cta-section">
+<a href="https://viadia.in" class="cta">Sign Up to Viadia</a>
+<p class="cta-subtext">Your invite will be ready as soon as you join.</p>
+</td></tr>
+
+<tr><td class="footer">
+<img src="https://viadia.in/assets/email/viadia-punchline.png" alt="Plan. Track. Share. Every Trip." class="footer-logo">
+<p class="footer-text">We're excited to be part of your journey.</p>
+<div class="footer-links"><a href="https://viadia.in">Website</a><a href="{{SUPPORT_URL}}">Help</a><a href="{{PRIVACY_URL}}">Privacy</a></div>
+<p class="footer-text" style="margin-top:15px;">© {{YEAR}} Viadia. All rights reserved.</p>
+</td></tr>
+
+</table></td></tr></table>
+</body>
+</html>

@@ -2,9 +2,9 @@ import { adminDb } from "../firebaseAdmin";
 import { FieldValue } from "firebase-admin/firestore";
 
 // Mirrors src/types.ts and src/lib/db.ts exactly -- this is the server-side counterpart to the
-// frontend's direct-Firestore join-request implementation, built independently against the same
-// schema (see docs/firebase-blueprint-v2.json's TripJoinRequest/UserTripApprovalList entities).
-// Not yet called by anything -- the frontend still talks to Firestore directly for this feature.
+// frontend's join-request implementation (see docs/firebase-blueprint-v2.json's
+// TripJoinRequest/UserTripApprovalList entities). The frontend has been migrated to call this via
+// routes/joinrequests.ts instead of talking to Firestore directly.
 
 export type TripRole = "owner" | "moderator" | "companion";
 
@@ -21,6 +21,7 @@ export interface TripJoinRequestEntry {
   requesterUserCode: string;
   requesterEmail: string;
   requesterName: string;
+  matchedTravelerId: string;
   matchedTravelerName: string;
   isNewTraveler: boolean;
   status: "pending" | "approved" | "rejected";
@@ -44,22 +45,45 @@ export interface UserTripApprovalList {
   approval_requested: string[];
 }
 
+// A traveler's identity record on a trip's roster, keyed by their canonical travelerId (never
+// a name -- names can collide between two different people, or change when someone joins with a
+// different display name than the placeholder the owner typed). userCode/email are empty strings
+// for a placeholder traveler who hasn't linked a real account yet (or never will -- a guest
+// tracked purely for expense-splitting purposes is a fully supported, permanent state, not just
+// a transient one).
+interface TravelerRecord {
+  role: TripRole;
+  userCode: string;
+  email: string;
+  displayName: string;
+}
+
 interface TripOwnerUserMaster {
   tripCode: string;
   owner: string;
+  ownerTravelerId?: string;
   allowModification: boolean;
-  users?: Record<string, [TripRole, string, string]>;
+  users?: Record<string, TravelerRecord>;
 }
 
 function generateJoinRequestId(): string {
   return `REQ${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 }
 
+// Canonical, permanent identifier for a traveler on a trip -- minted once when they're added
+// (by the owner typing a name, or for the owner themself at trip creation) and never changes
+// again, regardless of whether they ever link a real account. This is what expenses/splits/etc.
+// reference, specifically so a later display-name change (e.g. a placeholder getting matched to
+// a real joining user) never requires touching historical records.
+function generateTravelerId(): string {
+  return `T-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+}
+
 function resolveUserRoleOnTrip(master: TripOwnerUserMaster | null, userCode: string): TripRole | null {
   if (!master || !userCode) return null;
   if (master.owner === userCode) return "owner";
-  for (const tuple of Object.values(master.users || {})) {
-    if (tuple[1] === userCode) return tuple[0];
+  for (const record of Object.values(master.users || {})) {
+    if (record.userCode === userCode) return record.role;
   }
   return null;
 }
@@ -84,6 +108,7 @@ export interface SubmitJoinRequestInput {
   requesterUserCode: string;
   requesterEmail: string;
   requesterName: string;
+  matchedTravelerId?: string;
   matchedTravelerName: string;
   isNewTraveler: boolean;
 }
@@ -94,6 +119,10 @@ export interface SubmitJoinRequestInput {
 export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<TripJoinRequestEntry> {
   const requestId = generateJoinRequestId();
   const tripCode = input.tripCode.toUpperCase().trim();
+  // A new traveler's canonical ID is minted here, at submit time, so it's stable from the moment
+  // the request exists rather than being decided later at approval -- an existing placeholder's ID
+  // is passed straight through from what the frontend picked out of the roster.
+  const matchedTravelerId = input.isNewTraveler ? generateTravelerId() : (input.matchedTravelerId || "");
   const record: TripJoinRequestEntry = stripUndefined({
     requestId,
     tripCode,
@@ -101,6 +130,7 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
     requesterUserCode: input.requesterUserCode,
     requesterEmail: input.requesterEmail || "",
     requesterName: input.requesterName || "Traveler",
+    matchedTravelerId,
     matchedTravelerName: input.matchedTravelerName,
     isNewTraveler: input.isNewTraveler,
     status: "pending",
@@ -118,8 +148,8 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
 
     const approverUserCodes = new Set<string>();
     if (master.owner) approverUserCodes.add(master.owner);
-    for (const tuple of Object.values(master.users || {})) {
-      if (tuple[0] === "moderator" && tuple[1]) approverUserCodes.add(tuple[1]);
+    for (const record of Object.values(master.users || {})) {
+      if (record.role === "moderator" && record.userCode) approverUserCodes.add(record.userCode);
     }
 
     transaction.set(requestsDocRef, { tripCode, traveler_request: { [requestId]: record } }, { merge: true });
@@ -144,6 +174,7 @@ export interface CreateOwnerInviteInput {
   tripCode: string;
   tripTitle: string;
   inviterUserCode: string;
+  travelerId: string;
   travelerName: string;
   recipientUserCode: string;
   recipientEmail: string;
@@ -172,6 +203,7 @@ export async function createOwnerInvite(input: CreateOwnerInviteInput): Promise<
     requesterUserCode: input.inviterUserCode,
     requesterEmail: "",
     requesterName: "",
+    matchedTravelerId: input.travelerId,
     matchedTravelerName: input.travelerName,
     isNewTraveler: false,
     status: "pending",
@@ -257,11 +289,24 @@ export async function processUnmappedEmailSignup(email: string, newUserCode: str
           const master = await getTripOwnerMaster(tripCode);
           if (!master?.owner) return;
 
+          // The placeholder for this email (with its travelerId already minted) was created when
+          // the owner originally added them as a traveler, before they'd signed up -- find it by
+          // matching the stored email, since master.users is keyed by travelerId, not email.
+          const existingEntry = Object.entries(master.users || {}).find(
+            ([, record]) => record.email && normalizeEmail(record.email) === normalizedEmail
+          );
+          if (!existingEntry) {
+            console.warn(`[processUnmappedEmailSignup] No matching traveler placeholder found for ${normalizedEmail} on trip ${tripCode}, skipping.`);
+            return;
+          }
+          const [travelerId, existingRecord] = existingEntry;
+
           await createOwnerInvite({
             tripCode,
             tripTitle: trip.title || "",
             inviterUserCode: master.owner,
-            travelerName: normalizedEmail,
+            travelerId,
+            travelerName: existingRecord.displayName || normalizedEmail,
             recipientUserCode: newUserCode,
             recipientEmail: normalizedEmail,
           });
@@ -352,8 +397,8 @@ export async function cleanupApprovalToGrantForTrip(tripCode: string): Promise<v
 
     const approverUserCodes = new Set<string>();
     if (master.owner) approverUserCodes.add(master.owner);
-    for (const tuple of Object.values(master.users || {})) {
-      if (tuple[0] === "moderator" && tuple[1]) approverUserCodes.add(tuple[1]);
+    for (const record of Object.values(master.users || {})) {
+      if (record.role === "moderator" && record.userCode) approverUserCodes.add(record.userCode);
     }
 
     await Promise.all(
@@ -389,8 +434,8 @@ export async function sweepTripJoinRequestsForTrip(tripCode: string): Promise<vo
     }
     const master = await getTripOwnerMaster(code);
     if (master?.owner) userCodes.add(master.owner);
-    for (const tuple of Object.values(master?.users || {})) {
-      if (tuple[1]) userCodes.add(tuple[1]);
+    for (const record of Object.values(master?.users || {})) {
+      if (record.userCode) userCodes.add(record.userCode);
     }
 
     await Promise.all(
@@ -426,7 +471,7 @@ export { getTripOwnerMaster };
 interface TripDoc {
   code?: string;
   travelers?: string[];
-  travelerEmails?: Record<string, string>;
+  travelerNames?: Record<string, string>;
   [key: string]: any;
 }
 
@@ -442,21 +487,21 @@ async function getUserNameByUserCode(userCode: string): Promise<string | null> {
   return typeof name === "string" ? name.trim() || null : null;
 }
 
-// Surgically removes a single key from Trip.travelerEmails via FieldValue.delete(). Needed
+// Surgically removes a single key from Trip.travelerNames via FieldValue.delete(). Needed
 // because a merge:true .set() write can never do this on its own -- Firestore's merge semantics
 // for nested map fields only add/update keys present in the write payload, they never remove a
 // key just because it's absent. Logs explicitly (not silently swallowed) so failures are visible.
-async function removeTravelerEmailEntry(tripCode: string, travelerName: string): Promise<void> {
+async function removeTravelerNameEntry(tripCode: string, travelerId: string): Promise<void> {
   const code = tripCode.toUpperCase().trim();
-  console.log(`[removeTravelerEmailEntry] Attempting to delete travelerEmails.${travelerName} on trip ${code}`);
+  console.log(`[removeTravelerNameEntry] Attempting to delete travelerNames.${travelerId} on trip ${code}`);
   try {
     await adminDb
       .collection("trips")
       .doc(code)
-      .update({ [`travelerEmails.${travelerName}`]: FieldValue.delete() });
-    console.log(`[removeTravelerEmailEntry] Successfully deleted travelerEmails.${travelerName} on trip ${code}`);
+      .update({ [`travelerNames.${travelerId}`]: FieldValue.delete() });
+    console.log(`[removeTravelerNameEntry] Successfully deleted travelerNames.${travelerId} on trip ${code}`);
   } catch (e) {
-    console.error(`[removeTravelerEmailEntry] FAILED deleting travelerEmails.${travelerName} on trip ${code} -- error:`, e);
+    console.error(`[removeTravelerNameEntry] FAILED deleting travelerNames.${travelerId} on trip ${code} -- error:`, e);
   }
 }
 
@@ -464,7 +509,7 @@ async function saveTripOwnerMaster(
   tripCode: string,
   owner: string,
   allowModification: boolean,
-  users?: Record<string, [TripRole, string, string]>
+  users?: Record<string, TravelerRecord>
 ): Promise<void> {
   await adminDb
     .collection("trip_owner_user_master")
@@ -508,41 +553,47 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
   const requestsDoc = await getTripJoinRequestsDoc(code);
   const request = requestsDoc?.traveler_request?.[requestId];
   if (!request || request.status !== "pending") throw new Error("Request not found or already resolved.");
+  if (!request.matchedTravelerId) throw new Error("Request is missing its canonical traveler ID.");
 
   const master = await getTripOwnerMaster(code);
   if (!master) throw new Error("Trip not found.");
 
+  const travelerId = request.matchedTravelerId;
   let role: TripRole = "companion";
 
   if (request.isNewTraveler) {
     const trip = await getTrip(code);
     if (trip) {
       const travelers = trip.travelers || [];
-      const nextTravelers = travelers.includes(request.matchedTravelerName) ? travelers : [...travelers, request.matchedTravelerName];
+      const nextTravelers = travelers.includes(travelerId) ? travelers : [...travelers, travelerId];
       await adminDb
         .collection("trips")
         .doc(code)
         .set(
           {
             travelers: nextTravelers,
-            travelerEmails: { ...(trip.travelerEmails || {}), [request.matchedTravelerName]: request.requesterEmail },
+            travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.matchedTravelerName },
           },
           { merge: true }
         );
     }
 
-    const nextUsers: Record<string, [TripRole, string, string]> = {
+    const nextUsers: Record<string, TravelerRecord> = {
       ...(master.users || {}),
-      [request.matchedTravelerName]: ["companion", request.requesterUserCode, request.requesterEmail],
+      [travelerId]: { role: "companion", userCode: request.requesterUserCode, email: request.requesterEmail, displayName: request.matchedTravelerName },
     };
     await saveTripOwnerMaster(code, master.owner, master.allowModification, nextUsers);
   } else {
-    const priorTuple = master.users?.[request.matchedTravelerName];
-    role = priorTuple?.[0] || "companion";
+    // Existing placeholder matched: the roster key (travelerId) never changes, so every
+    // historical expense/split already pointing at it stays correctly attached -- this is purely
+    // a display-name/userCode/email update on the same record. The role the owner originally
+    // assigned to this placeholder is preserved; only identity fields change.
+    const priorRecord = master.users?.[travelerId];
+    role = priorRecord?.role || "companion";
 
-    const nextUsers: Record<string, [TripRole, string, string]> = {
+    const nextUsers: Record<string, TravelerRecord> = {
       ...(master.users || {}),
-      [request.matchedTravelerName]: [role, request.requesterUserCode, request.requesterEmail],
+      [travelerId]: { role, userCode: request.requesterUserCode, email: request.requesterEmail, displayName: request.requesterName },
     };
     await saveTripOwnerMaster(code, master.owner, master.allowModification, nextUsers);
 
@@ -552,7 +603,7 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
         .collection("trips")
         .doc(code)
         .set(
-          { travelerEmails: { ...(trip.travelerEmails || {}), [request.matchedTravelerName]: request.requesterEmail } },
+          { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.requesterName } },
           { merge: true }
         );
     }
@@ -614,91 +665,38 @@ export async function acceptOwnerInvite(tripCode: string, requestId: string, acc
   if (!request || request.status !== "pending" || request.recipientUserCode !== acceptingUserCode) {
     throw new Error("Invite not found, already resolved, or not addressed to this account.");
   }
+  if (!request.matchedTravelerId) throw new Error("Invite is missing its canonical traveler ID.");
 
   const master = await getTripOwnerMaster(code);
-  const placeholderName = request.matchedTravelerName;
-  const role: TripRole = master?.users?.[placeholderName]?.[0] || "companion";
-  const trip = await getTrip(code);
+  const travelerId = request.matchedTravelerId;
+  const priorRecord = master?.users?.[travelerId];
+  const role: TripRole = priorRecord?.role || "companion";
 
-  // Replace the placeholder (typically the invited email) with the accepting user's actual
-  // display name, de-duplicated against every other current traveler name on this trip
-  // (name, name_2, name_3, ...). Falls back to keeping the placeholder if no real name is on file.
-  let finalName = placeholderName;
+  // The roster key (travelerId) never changes -- this is purely an identity update on the
+  // existing record. No rename-everywhere pass needed across travelers/expenses/splits/checklist,
+  // since nothing else in the trip ever referenced this traveler by name in the first place.
+  let finalName = request.matchedTravelerName;
   try {
     const realName = await getUserNameByUserCode(acceptingUserCode);
-    if (realName) {
-      const existingNames = new Set(
-        ((trip?.travelers as string[]) || []).filter((n) => n !== placeholderName).map((n) => n.toLowerCase())
-      );
-      let candidate = realName;
-      let suffix = 2;
-      while (existingNames.has(candidate.toLowerCase())) {
-        candidate = `${realName}_${suffix}`;
-        suffix++;
-      }
-      finalName = candidate;
-    }
+    if (realName) finalName = realName;
   } catch (e) {
     console.error("Failed resolving real name for accepted invite, keeping placeholder name:", e);
   }
 
-  // Only now -- at acceptance, not invite creation -- does the real userCode/email get written
-  // into trip_owner_user_master.users and Trip.travelerEmails, and the placeholder name gets
-  // replaced with the accepting user's real name.
   try {
-    const nextUsers: Record<string, [TripRole, string, string]> = { ...(master?.users || {}) };
-    delete nextUsers[placeholderName];
-    nextUsers[finalName] = [role, acceptingUserCode, request.recipientEmail || ""];
+    const nextUsers: Record<string, TravelerRecord> = { ...(master?.users || {}) };
+    nextUsers[travelerId] = { role, userCode: acceptingUserCode, email: request.recipientEmail || "", displayName: finalName };
     await saveTripOwnerMaster(code, master?.owner || "", master?.allowModification ?? false, nextUsers);
 
+    const trip = await getTrip(code);
     if (trip) {
-      const nextTravelers = ((trip.travelers as string[]) || []).map((n) => (n === placeholderName ? finalName : n));
-      const nextEmails: Record<string, string> = { ...((trip.travelerEmails as Record<string, string>) || {}) };
-      delete nextEmails[placeholderName];
-      nextEmails[finalName] = request.recipientEmail || "";
-
-      // Carry the rename through any expense/checklist references made to the placeholder before
-      // the invite was accepted (same as the frontend's manual rename handling).
-      const nextExpenses = ((trip.expenses as any[]) || []).map((exp) => {
-        let updated = { ...exp };
-        let changed = false;
-        if (updated.paidBy === placeholderName) {
-          updated.paidBy = finalName;
-          changed = true;
-        }
-        if (updated.splits && updated.splits.length > 0) {
-          const nextSplits = updated.splits.map((s: any) =>
-            s.traveler === placeholderName ? { ...s, traveler: finalName } : s
-          );
-          if (changed || nextSplits.some((s: any, i: number) => s.traveler !== updated.splits[i].traveler)) {
-            updated.splits = nextSplits;
-            changed = true;
-          }
-        }
-        return changed ? updated : exp;
-      });
-      const nextChecklist = ((trip.checklist as any[]) || []).map((item) =>
-        item.assignedTo === placeholderName ? { ...item, assignedTo: finalName } : item
-      );
-
       await adminDb
         .collection("trips")
         .doc(code)
         .set(
-          {
-            travelers: nextTravelers,
-            travelerEmails: nextEmails,
-            expenses: nextExpenses,
-            checklist: nextChecklist,
-          },
+          { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: finalName } },
           { merge: true }
         );
-
-      // The above merge write cannot remove the old placeholder key on its own -- same fix as
-      // declineOwnerInvite.
-      if (finalName !== placeholderName) {
-        await removeTravelerEmailEntry(code, placeholderName);
-      }
     }
   } catch (e) {
     console.error("Failed writing accepted invite identity mapping:", e);
@@ -735,6 +733,46 @@ export async function acceptOwnerInvite(tripCode: string, requestId: string, acc
 // The invited user declines: the placeholder traveler slot is removed immediately (unchanged,
 // separate concern from request-record persistence). The request entry itself is kept (status set
 // to 'rejected'), not hard-deleted.
+// Inviter withdraws an invite they sent (distinct from decline, which is the recipient's own
+// action). Only the original inviter (requesterUserCode on the owner_invite entry) may cancel,
+// and only while it's still pending.
+export async function cancelOwnerInvite(tripCode: string, requestId: string, cancelingUserCode: string): Promise<void> {
+  const code = tripCode.toUpperCase().trim();
+  const requestsDocRef = adminDb.collection("trip_join_requests").doc(code);
+  const requestsDoc = await getTripJoinRequestsDoc(code);
+  const request = requestsDoc?.owner_invite?.[requestId];
+  if (!request || request.requesterUserCode !== cancelingUserCode || request.status !== "pending") {
+    throw new Error("Invite not found, not pending, or not sent by this account.");
+  }
+
+  try {
+    await requestsDocRef.update({
+      [`owner_invite.${requestId}.status`]: "rejected",
+      [`owner_invite.${requestId}.resolvedAt`]: new Date().toISOString(),
+      [`owner_invite.${requestId}.resolvedBy`]: cancelingUserCode,
+    });
+  } catch (error) {
+    console.warn("Failed marking invite cancelled:", error);
+  }
+
+  try {
+    if (request.recipientUserCode) {
+      await adminDb
+        .collection("user_trip_approval_list")
+        .doc(request.recipientUserCode)
+        .update({ approval_to_grant: FieldValue.arrayRemove(code) })
+        .catch(() => {});
+    }
+    await adminDb
+      .collection("user_trip_approval_list")
+      .doc(cancelingUserCode)
+      .update({ approval_requested: FieldValue.arrayRemove(code) })
+      .catch(() => {});
+  } catch (error) {
+    console.warn("Failed clearing approval lists after invite cancellation:", error);
+  }
+}
+
 export async function declineOwnerInvite(tripCode: string, requestId: string, decliningUserCode: string): Promise<void> {
   const code = tripCode.toUpperCase().trim();
   const requestsDocRef = adminDb.collection("trip_join_requests").doc(code);
@@ -743,12 +781,13 @@ export async function declineOwnerInvite(tripCode: string, requestId: string, de
   if (!request || request.recipientUserCode !== decliningUserCode) {
     throw new Error("Invite not found or not addressed to this account.");
   }
+  const travelerId = request.matchedTravelerId;
 
   try {
     const master = await getTripOwnerMaster(code);
-    if (master?.users && master.users[request.matchedTravelerName]) {
+    if (travelerId && master?.users && master.users[travelerId]) {
       const nextUsers = { ...master.users };
-      delete nextUsers[request.matchedTravelerName];
+      delete nextUsers[travelerId];
       await saveTripOwnerMaster(code, master.owner, master.allowModification, nextUsers);
     }
   } catch (e) {
@@ -757,15 +796,15 @@ export async function declineOwnerInvite(tripCode: string, requestId: string, de
 
   try {
     const trip = await getTrip(code);
-    if (trip) {
-      const nextTravelers = (trip.travelers || []).filter((n) => n !== request.matchedTravelerName);
+    if (trip && travelerId) {
+      const nextTravelers = (trip.travelers || []).filter((id) => id !== travelerId);
       await adminDb.collection("trips").doc(code).set({ travelers: nextTravelers }, { merge: true });
     }
     // The above set({merge: true}) correctly replaces the whole travelers array, but merge
-    // semantics never remove a nested travelerEmails map key just because it's absent from the
-    // write payload -- removeTravelerEmailEntry uses FieldValue.delete() via a targeted update,
+    // semantics never remove a nested travelerNames map key just because it's absent from the
+    // write payload -- removeTravelerNameEntry uses FieldValue.delete() via a targeted update,
     // the only way to actually remove it.
-    await removeTravelerEmailEntry(code, request.matchedTravelerName);
+    if (travelerId) await removeTravelerNameEntry(code, travelerId);
   } catch (e) {
     console.error("Failed removing Trip.travelers placeholder on decline:", e);
   }

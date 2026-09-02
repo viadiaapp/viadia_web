@@ -2,15 +2,30 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { adminDb } from "../firebaseAdmin";
 import { createRazorpayOrder, getRazorpayKeyId, verifyPaymentSignature, verifyWebhookSignature } from "../services/razorpay";
-import { applyPurchasedPlan } from "../services/subscriptionService";
+import { recordPurchaseAttempt, applySuccessfulTransaction, getCurrentSubscriptionState } from "../services/subscriptionService";
 
 const router = Router();
 
 // Lightweight, backend-internal bookkeeping only -- NOT part of the app's Firestore schema.
 // Tracks a Razorpay order from creation through to verification/webhook so /verify and /webhook
-// know which userCode + planId it was for. The actual, permanent ledger entry only gets written
-// by applyPurchasedPlan() once payment is confirmed (see services/subscriptionService.ts).
+// know which userCode + planId it was for. The actual, permanent ledger entry (success or
+// failure) only gets written by recordPurchaseAttempt() (see services/subscriptionService.ts).
 const PENDING_ORDERS_COLLECTION = "razorpay_payment_orders";
+
+// Resolves a completed recordPurchaseAttempt into the granted subscription state -- either by
+// actually applying it (first time this orderId succeeded) or reading back what was already
+// granted (a retry/duplicate call for an orderId that already succeeded once).
+async function resolveGrantedState(
+  attempt: { subscriptionCode: string; alreadyProcessed: boolean },
+  userCode: string,
+  planId: string
+) {
+  if (attempt.alreadyProcessed) {
+    const existing = await getCurrentSubscriptionState(userCode);
+    if (existing) return existing;
+  }
+  return applySuccessfulTransaction({ userCode, planId, subscriptionCode: attempt.subscriptionCode });
+}
 
 // Server decides the price — it is looked up from Firestore by planId, never trusted from the client.
 router.post("/razorpay/create-order", requireAuth, async (req, res) => {
@@ -48,6 +63,8 @@ router.post("/razorpay/create-order", requireAuth, async (req, res) => {
         uid: req.uid,
         userCode: user.userCode,
         planId: plan.planId,
+        amountPaid: plan.discountedPrice,
+        currency: plan.currency || "USD",
         createdAt: new Date().toISOString(),
       });
 
@@ -73,15 +90,8 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
       return res.status(400).json({ error: "Missing payment verification fields." });
     }
 
-    const valid = verifyPaymentSignature({
-      orderId: razorpay_order_id,
-      paymentId: razorpay_payment_id,
-      signature: razorpay_signature,
-    });
-    if (!valid) {
-      return res.status(400).json({ error: "Payment signature verification failed." });
-    }
-
+    // Look up the pending order BEFORE checking the signature, so userCode/planId are available
+    // to attribute a failure record to even if the signature itself turns out to be invalid.
     const orderSnap = await adminDb.collection(PENDING_ORDERS_COLLECTION).doc(razorpay_order_id).get();
     if (!orderSnap.exists) {
       return res.status(404).json({ error: "Payment order not found." });
@@ -91,23 +101,68 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "This payment order does not belong to this account." });
     }
 
-    const result = await applyPurchasedPlan({
+    const valid = verifyPaymentSignature({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
+    if (!valid) {
+      await recordPurchaseAttempt({
+        userCode: pendingOrder.userCode,
+        planId: pendingOrder.planId,
+        orderId: razorpay_order_id,
+        paymentId: razorpay_payment_id,
+        paymentMethod: "razorpay",
+        amountPaid: pendingOrder.amountPaid,
+        currency: pendingOrder.currency,
+        status: "failed",
+        failureReason: "signature_mismatch",
+      }).catch((e) => console.error("Failed recording signature-mismatch attempt:", e));
+      return res.status(400).json({ error: "Payment signature verification failed." });
+    }
+
+    const attempt = await recordPurchaseAttempt({
       userCode: pendingOrder.userCode,
       planId: pendingOrder.planId,
       orderId: razorpay_order_id,
       paymentId: razorpay_payment_id,
       paymentMethod: "razorpay",
+      amountPaid: pendingOrder.amountPaid,
+      currency: pendingOrder.currency,
+      status: "completed",
     });
+    const result = await resolveGrantedState(attempt, pendingOrder.userCode, pendingOrder.planId);
 
     res.json({ success: true, subscription: result });
   } catch (err: any) {
     console.error("razorpay verify failed:", err?.message || err);
+    // Best-effort failure record -- only if we got far enough to know which order this was.
+    const orderId = req.body?.razorpay_order_id;
+    if (orderId) {
+      const orderSnap = await adminDb.collection(PENDING_ORDERS_COLLECTION).doc(orderId).get().catch(() => null);
+      if (orderSnap?.exists) {
+        const pendingOrder = orderSnap.data()!;
+        await recordPurchaseAttempt({
+          userCode: pendingOrder.userCode,
+          planId: pendingOrder.planId,
+          orderId,
+          paymentMethod: "razorpay",
+          amountPaid: pendingOrder.amountPaid,
+          currency: pendingOrder.currency,
+          status: "failed",
+          failureReason: err?.message || "verify_exception",
+        }).catch(() => {});
+      }
+    }
     res.status(500).json({ error: "Failed to verify payment." });
   }
 });
 
 // Server-to-server confirmation — a second, authoritative path in case the browser closes before
-// the client ever calls /verify. Idempotent via applyPurchasedPlan's own orderId-based check.
+// the client ever calls /verify. Idempotent via recordPurchaseAttempt's own orderId-based check.
+// Also records payment.failed events, not just successes -- Razorpay can send a payment.failed
+// webhook followed later by payment.captured for the same order on a user-initiated retry (e.g.
+// wrong UPI PIN, then correct PIN), so a failure here doesn't mean the order is dead.
 router.post("/razorpay/webhook", async (req, res) => {
   try {
     const signature = req.headers["x-razorpay-signature"] as string;
@@ -127,18 +182,36 @@ router.post("/razorpay/webhook", async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
+    const orderSnap = await adminDb.collection(PENDING_ORDERS_COLLECTION).doc(orderId).get();
+    if (!orderSnap.exists) {
+      return res.status(200).json({ received: true });
+    }
+    const pendingOrder = orderSnap.data()!;
+
     if (event.event === "payment.captured" || event.event === "order.paid") {
-      const orderSnap = await adminDb.collection(PENDING_ORDERS_COLLECTION).doc(orderId).get();
-      if (orderSnap.exists) {
-        const pendingOrder = orderSnap.data()!;
-        await applyPurchasedPlan({
-          userCode: pendingOrder.userCode,
-          planId: pendingOrder.planId,
-          orderId,
-          paymentId: payload.id,
-          paymentMethod: "razorpay",
-        });
-      }
+      const attempt = await recordPurchaseAttempt({
+        userCode: pendingOrder.userCode,
+        planId: pendingOrder.planId,
+        orderId,
+        paymentId: payload.id,
+        paymentMethod: "razorpay",
+        amountPaid: pendingOrder.amountPaid,
+        currency: pendingOrder.currency,
+        status: "completed",
+      });
+      await resolveGrantedState(attempt, pendingOrder.userCode, pendingOrder.planId);
+    } else if (event.event === "payment.failed") {
+      await recordPurchaseAttempt({
+        userCode: pendingOrder.userCode,
+        planId: pendingOrder.planId,
+        orderId,
+        paymentId: payload.id,
+        paymentMethod: "razorpay",
+        amountPaid: pendingOrder.amountPaid,
+        currency: pendingOrder.currency,
+        status: "failed",
+        failureReason: payload.error_description || payload.error_reason || "payment_failed",
+      });
     }
 
     res.status(200).json({ received: true });

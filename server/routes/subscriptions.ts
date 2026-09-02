@@ -58,7 +58,8 @@ async function resolveUserCode(uid: string | undefined): Promise<string | null> 
 // /me/normalize-lifetime below for the one narrow, safe write this collection actually needs from
 // the client. A generic "set my own subscription state" endpoint would let a user set
 // isActive/planId/effectiveEndDate directly, exactly the fields real purchases grant via
-// services/subscriptionService.ts's applyPurchasedPlan -- i.e. grant themselves free access.
+// services/subscriptionService.ts's recordPurchaseAttempt + applySuccessfulTransaction --
+// i.e. grant themselves free access.
 router.get(
   "/me",
   requireAuth,

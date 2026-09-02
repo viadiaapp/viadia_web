@@ -16,6 +16,12 @@ function stripRestrictedFields(body: Record<string, any>) {
   return clean;
 }
 
+async function resolveUserCode(uid: string | undefined): Promise<string | null> {
+  if (!uid) return null;
+  const snap = await adminDb.collection("users").doc(uid).get();
+  return snap.exists ? snap.data()?.userCode || null : null;
+}
+
 // Full profile for the caller themselves; a public-safe subset (name/email/userCode) for anyone else
 // (used e.g. to show a trip's owner display name).
 router.get(
@@ -211,6 +217,10 @@ router.get(
   "/config/:userCode",
   requireAuth,
   asyncHandler(async (req, res) => {
+    const callerUserCode = await resolveUserCode(req.uid);
+    if (!callerUserCode || callerUserCode !== req.params.userCode) {
+      return res.status(403).json({ error: "You may only read your own config." });
+    }
     const snap = await adminDb.collection("user_configs").doc(req.params.userCode).get();
     if (!snap.exists) return res.status(404).json({ error: "Not found." });
     res.json(snap.data());
@@ -221,6 +231,10 @@ router.put(
   "/config/:userCode",
   requireAuth,
   asyncHandler(async (req, res) => {
+    const callerUserCode = await resolveUserCode(req.uid);
+    if (!callerUserCode || callerUserCode !== req.params.userCode) {
+      return res.status(403).json({ error: "You may only update your own config." });
+    }
     await adminDb
       .collection("user_configs")
       .doc(req.params.userCode)
@@ -230,13 +244,16 @@ router.put(
 );
 
 // Replaces the old user_tripcode_master/{userCode} -> {tripCodes: []} lookup. The client now gets
-// this by querying user_specific_trip_list where userCode == X, so this just proxies that query
-// (kept for any older client still calling it, but new code should call the client's
-// getUserTripCodes()-equivalent directly instead).
+// this by querying user_specific_trip_list where userCode == X, so this just proxies that query.
+// Self only -- which trips someone belongs to is personal data.
 router.get(
   "/tripcodes/:userCode",
   requireAuth,
   asyncHandler(async (req, res) => {
+    const callerUserCode = await resolveUserCode(req.uid);
+    if (!callerUserCode || callerUserCode !== req.params.userCode) {
+      return res.status(403).json({ error: "You may only read your own trip codes." });
+    }
     const snap = await adminDb.collection("user_specific_trip_list").where("userCode", "==", req.params.userCode).get();
     const tripCodes = snap.docs.map((d) => (d.data().tripCode as string)).filter(Boolean);
     res.json({ userCode: req.params.userCode, tripCodes });
@@ -248,6 +265,10 @@ router.get(
   "/associations/:userCode",
   requireAuth,
   asyncHandler(async (req, res) => {
+    const callerUserCode = await resolveUserCode(req.uid);
+    if (!callerUserCode || callerUserCode !== req.params.userCode) {
+      return res.status(403).json({ error: "You may only read your own trip associations." });
+    }
     const snap = await adminDb.collection("user_trip_association_master").doc(req.params.userCode).get();
     res.json(snap.exists ? snap.data() : {});
   })

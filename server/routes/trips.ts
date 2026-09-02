@@ -17,12 +17,21 @@ const ROLE_PERMISSIONS: Record<TripRole, { allowModify: boolean; approveChanges:
   companion: { allowModify: true, approveChanges: false, deleteTrip: false },
 };
 
-// trip_owner_user_master/{tripCode}. users is keyed by traveler display name -> [role, userCode, email].
+// trip_owner_user_master/{tripCode}. users is keyed by each traveler's canonical travelerId,
+// never a display name -- names can collide or change (e.g. when a placeholder gets matched to
+// a real account with a different display name), a stable ID never does.
+type TravelerRecord = {
+  role: TripRole;
+  userCode: string;
+  email: string;
+  displayName: string;
+};
 type TripOwnerUserMaster = {
   tripCode: string;
   owner: string; // userCode
+  ownerTravelerId?: string;
   allowModification: boolean;
-  users?: { [travelerName: string]: [TripRole, string, string] };
+  users?: { [travelerId: string]: TravelerRecord };
 };
 
 function normalizeCode(code: string): string {
@@ -47,8 +56,8 @@ function resolveRole(master: TripOwnerUserMaster | null, userCode: string | null
   if (!master || !userCode) return null;
   if (master.owner === userCode) return "owner";
   const users = master.users || {};
-  for (const tuple of Object.values(users)) {
-    if (tuple[1] === userCode) return tuple[0];
+  for (const record of Object.values(users)) {
+    if (record.userCode === userCode) return record.role;
   }
   return null;
 }
@@ -64,6 +73,10 @@ function canWriteTrip(master: TripOwnerUserMaster | null, role: TripRole | null)
 
 function canDeleteTrip(role: TripRole | null): boolean {
   return !!role && ROLE_PERMISSIONS[role].deleteTrip;
+}
+
+function canApproveChanges(role: TripRole | null): boolean {
+  return !!role && ROLE_PERMISSIONS[role].approveChanges;
 }
 
 router.get(
@@ -132,6 +145,30 @@ router.put(
   })
 );
 
+// Surgically removes a single key from trips/{code}.travelerNames via FieldValue.delete().
+// Needed because the main PUT /:code above writes with { merge: true }, and Firestore's merge
+// semantics for nested map fields only add/update keys present in the payload -- they never
+// remove a key just because it's absent. Same write-permission check as the main trip save.
+router.delete(
+  "/:code/traveler-name/:travelerId",
+  optionalAuth,
+  asyncHandler(async (req, res) => {
+    const code = normalizeCode(req.params.code);
+    const master = await getMaster(code);
+    const userCode = await resolveUserCode(req.uid);
+    const role = resolveRole(master, userCode);
+    if (!canWriteTrip(master, role)) {
+      return res.status(403).json({ error: "Action is unauthorized. Please seek permission from the trip owner to allow modification of this trip." });
+    }
+    await adminDb
+      .collection("trips")
+      .doc(code)
+      .update({ [`travelerNames.${req.params.travelerId}`]: FieldValue.delete() })
+      .catch(() => {}); // no-op if the trip doc or key doesn't exist -- not a real failure
+    res.json({ success: true });
+  })
+);
+
 router.delete(
   "/:code",
   optionalAuth,
@@ -148,8 +185,8 @@ router.delete(
     // the trip itself, mirroring the client's handleUpdateAppData deletion loop.
     const associatedUserCodes = new Set<string>();
     if (master?.owner) associatedUserCodes.add(master.owner);
-    for (const tuple of Object.values(master?.users || {})) {
-      if (tuple[1]) associatedUserCodes.add(tuple[1]);
+    for (const record of Object.values(master?.users || {})) {
+      if (record.userCode) associatedUserCodes.add(record.userCode);
     }
 
     await adminDb.collection("trips").doc(code).delete();
@@ -224,7 +261,7 @@ router.put(
       return res.status(403).json({ error: "Only the trip owner can change trip sharing settings." });
     }
 
-    const { allowModification, users } = req.body || {};
+    const { allowModification, users, ownerTravelerId } = req.body || {};
     const owner = existing?.owner || userCode;
     if (!owner) {
       return res.status(400).json({ error: "Could not resolve a userCode for the trip owner." });
@@ -233,6 +270,7 @@ router.put(
       tripCode: code,
       owner,
       allowModification: !!allowModification,
+      ...(ownerTravelerId ? { ownerTravelerId } : existing?.ownerTravelerId ? { ownerTravelerId: existing.ownerTravelerId } : {}),
       ...(users ? { users } : existing?.users ? { users: existing.users } : {}),
     };
     await adminDb.collection("trip_owner_user_master").doc(code).set(result, { merge: true });
@@ -252,6 +290,78 @@ router.delete(
       return res.status(403).json({ error: "Only the trip owner can delete trip ownership data." });
     }
     await adminDb.collection("trip_owner_user_master").doc(code).delete();
+    res.json({ success: true });
+  })
+);
+
+// Syncs a userCode's role into user_trip_association_master/{targetUserCode}.{code} -- a derived
+// convenience index, NOT a source of truth. trip_owner_user_master is the source of truth, so the
+// role written here is always re-derived from it server-side and NEVER trusted from the client --
+// there's deliberately no role field in the request body at all, nothing for a client to even try
+// to influence. Covers both directions safely: a user syncing their own already-confirmed role
+// (always allowed, since it can only ever write what trip_owner_user_master already says about
+// them), and an owner/moderator syncing someone else's role as part of approving a request or
+// changing a traveler's role (requires approveChanges permission on this trip).
+router.post(
+  "/:code/user-role/:userCode",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const code = normalizeCode(req.params.code);
+    const targetUserCode = req.params.userCode;
+    const callerUserCode = await resolveUserCode(req.uid);
+    if (!callerUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
+
+    const master = await getMaster(code);
+    if (!master) return res.status(404).json({ error: "Trip not found." });
+
+    const resolvedRole = resolveRole(master, targetUserCode);
+    if (!resolvedRole) {
+      return res.status(404).json({ error: "This user has no role on this trip according to trip_owner_user_master." });
+    }
+
+    if (targetUserCode !== callerUserCode) {
+      const callerRole = resolveRole(master, callerUserCode);
+      if (!canApproveChanges(callerRole)) {
+        return res.status(403).json({ error: "You do not have permission to set another user's role on this trip." });
+      }
+    }
+
+    await adminDb
+      .collection("user_trip_association_master")
+      .doc(targetUserCode)
+      .set({ [code]: resolvedRole }, { merge: true });
+    res.json({ success: true, role: resolvedRole });
+  })
+);
+
+// Removes a userCode's entry from user_trip_association_master/{targetUserCode}.{code}. A user
+// may always remove their own entry (leaving a trip is always their own choice, regardless of
+// whether trip_owner_user_master still exists -- e.g. after the trip itself was already deleted).
+// Removing someone else's entry requires approveChanges permission on this trip, verified against
+// trip_owner_user_master -- if that record no longer exists, there's no way to verify the caller
+// ever had permission, so this fails closed (403) rather than assuming it's fine.
+router.delete(
+  "/:code/user-role/:userCode",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const code = normalizeCode(req.params.code);
+    const targetUserCode = req.params.userCode;
+    const callerUserCode = await resolveUserCode(req.uid);
+    if (!callerUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
+
+    if (targetUserCode !== callerUserCode) {
+      const master = await getMaster(code);
+      const callerRole = resolveRole(master, callerUserCode);
+      if (!canApproveChanges(callerRole)) {
+        return res.status(403).json({ error: "You do not have permission to remove another user's role on this trip." });
+      }
+    }
+
+    await adminDb
+      .collection("user_trip_association_master")
+      .doc(targetUserCode)
+      .update({ [code]: FieldValue.delete() })
+      .catch(() => {});
     res.json({ success: true });
   })
 );

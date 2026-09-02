@@ -3,15 +3,15 @@ import { adminDb } from "../firebaseAdmin";
 import { requireAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
 import { verifyOneTimeProductPurchase, acknowledgeOneTimeProductPurchase } from "../services/googlePlay";
-import { applyPurchasedPlan } from "../services/subscriptionService";
+import { recordPurchaseAttempt, applySuccessfulTransaction, getCurrentSubscriptionState } from "../services/subscriptionService";
 
 const router = Router();
 
 // The 5 plans (1_year, 2_year, 3_year, 5_year, lifetime) are modeled as Google Play ONE-TIME
 // products, not subscriptions -- they're fixed-term passes with no auto-renewal, and this app's
-// own applyPurchasedPlan()/calculateEndDate() already compute the multi-year expiry, exactly like
-// it does for Razorpay. Play's job here is only to confirm the purchase happened; product IDs in
-// Play Console must match these planId strings exactly.
+// own applySuccessfulTransaction()/calculateEndDate() already compute the multi-year expiry,
+// exactly like it does for Razorpay. Play's job here is only to confirm the purchase happened;
+// product IDs in Play Console must match these planId strings exactly.
 router.post(
   "/verify",
   requireAuth,
@@ -27,28 +27,59 @@ router.post(
       return res.status(400).json({ error: "This account has no userCode assigned yet." });
     }
 
+    const planSnap = await adminDb.collection("subscription_types").doc(productId).get();
+    const plan = planSnap.exists ? (planSnap.data() as any) : null;
+
     let purchase;
     try {
       purchase = await verifyOneTimeProductPurchase(productId, purchaseToken);
     } catch (err: any) {
       console.error("Google Play verification failed:", err?.message || err);
+      await recordPurchaseAttempt({
+        userCode,
+        planId: productId,
+        orderId: purchaseToken,
+        paymentMethod: "google_play",
+        amountPaid: plan?.discountedPrice,
+        currency: plan?.currency,
+        status: "failed",
+        failureReason: "play_verification_failed",
+      }).catch(() => {});
       return res.status(400).json({ error: "Could not verify this purchase with Google Play." });
     }
 
     // purchaseState: 0 = Purchased. Anything else (canceled/pending) is not a completed purchase.
     if (purchase.purchaseState !== 0) {
+      await recordPurchaseAttempt({
+        userCode,
+        planId: productId,
+        orderId: purchase.orderId || purchaseToken,
+        paymentMethod: "google_play",
+        amountPaid: plan?.discountedPrice,
+        currency: plan?.currency,
+        status: "failed",
+        failureReason: `purchase_state_${purchase.purchaseState}`,
+      }).catch(() => {});
       return res.status(400).json({ error: "This purchase is not in a completed state." });
     }
 
-    const result = await applyPurchasedPlan({
+    const orderId = purchase.orderId || purchaseToken;
+    const attempt = await recordPurchaseAttempt({
       userCode,
       planId: productId,
-      orderId: purchase.orderId || purchaseToken,
+      orderId,
       paymentId: purchaseToken,
       paymentMethod: "google_play",
+      amountPaid: plan?.discountedPrice,
+      currency: plan?.currency,
+      status: "completed",
     });
 
-    // Acknowledge only after successfully recording the purchase on our side -- if applyPurchasedPlan
+    const result = attempt.alreadyProcessed
+      ? (await getCurrentSubscriptionState(userCode)) || (await applySuccessfulTransaction({ userCode, planId: productId, subscriptionCode: attempt.subscriptionCode }))
+      : await applySuccessfulTransaction({ userCode, planId: productId, subscriptionCode: attempt.subscriptionCode });
+
+    // Acknowledge only after successfully recording the purchase on our side -- if the recording
     // above had thrown, we want Google's own unacknowledged-purchase retry/refund safety net still
     // active rather than closing it out on a purchase we failed to grant access for.
     if (purchase.acknowledgementState === 0) {

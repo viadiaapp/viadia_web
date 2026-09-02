@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="x-apple-disable-message-reformatting">
+<title>Welcome to Viadia</title>
+<style>
+body{margin:0;padding:0;background:#f5f7fb;font-family:Arial,Helvetica,sans-serif;color:#1f2937}
+table{border-collapse:collapse;border-spacing:0} img{border:0;display:block;max-width:100%}a{text-decoration:none}
+.wrapper{width:100%;background:#f5f7fb;padding:40px 15px}
+.container{width:100%;max-width:620px;margin:0 auto;background:#fff;border-radius:24px;overflow:hidden}
+.header{padding:34px 30px 18px;text-align:center}.logo{width:145px;height:auto;margin:0 auto}
+.hero{padding:20px 45px 12px;text-align:center}
+.hero-title{margin:0 0 16px;color:#172554;font-size:36px;line-height:44px;font-weight:700;letter-spacing:-.5px}
+.hero-title .brand{color:#4f46e5}.hero-text{max-width:480px;margin:0 auto;color:#64748b;font-size:17px;line-height:27px}
+.intro{padding:18px 50px 15px;text-align:center}.intro-text{max-width:500px;margin:0 auto;color:#475569;font-size:16px;line-height:26px}
+.features{padding:12px 45px 20px}.feature{padding:13px 0}.feature-icon{width:38px;padding-right:13px;vertical-align:top;font-size:25px;line-height:28px}.feature-content{vertical-align:top}
+.feature-title{margin:0 0 3px;color:#1e293b;font-size:16px;line-height:22px;font-weight:700}.feature-description{margin:0;color:#64748b;font-size:14px;line-height:22px}
+.cta-section{padding:15px 40px 42px;text-align:center}.cta{display:inline-block;padding:15px 32px;background:#4f46e5;border-radius:12px;color:#fff!important;font-size:16px;font-weight:700}.cta-subtext{margin:14px 0 0;color:#94a3b8;font-size:13px;line-height:20px}
+.footer{padding:28px 30px;background:#f8fafc;text-align:center}.footer-logo{width:190px;height:auto;margin:0 auto 14px}.footer-text{margin:0;color:#94a3b8;font-size:12px;line-height:19px}.footer-links{margin-top:13px}.footer-links a{margin:0 7px;color:#64748b;font-size:12px}
+@media only screen and (max-width:600px){
+.wrapper{padding:15px 8px}.container{border-radius:18px}.header{padding:28px 20px 12px}.hero{padding:20px 25px 10px}.hero-title{font-size:30px;line-height:38px}.hero-text{font-size:16px;line-height:25px}.intro{padding:12px 25px 15px}.features{padding-left:25px;padding-right:25px}.cta-section{padding-left:25px;padding-right:25px}.footer-logo{width:170px}
+}
+</style>
+</head>
+<body>
+<table role="presentation" width="100%" class="wrapper"><tr><td align="center">
+<table role="presentation" width="100%" class="container">
+
+<tr><td class="header">
+<a href="https://viadia.in"><img src="https://viadia.in/assets/email/viadia-name.png" alt="Viadia" class="logo"></a>
+</td></tr>
+
+<tr><td class="hero">
+<h1 class="hero-title">Hey {{USER_NAME}}! 👋<br>Welcome to <span class="brand">Viadia</span>!</h1>
+<p class="hero-text">We're so glad you're here! Let's make your next trip the easiest one to plan yet. ✨</p>
+</td></tr>
+
+<tr><td class="intro">
+<p class="intro-text">Whether it's a spontaneous weekend getaway or the trip you've been dreaming about for years, Viadia brings your plans, places, bookings, expenses and travel companions together in one happy place.</p>
+</td></tr>
+
+<tr><td class="features">
+<table role="presentation" width="100%" class="feature"><tr><td class="feature-icon">🗺️</td><td class="feature-content"><p class="feature-title">Plan your way</p><p class="feature-description">Create itineraries, add places, bookings, notes and everything your trip needs.</p></td></tr></table>
+<table role="presentation" width="100%" class="feature"><tr><td class="feature-icon">💰</td><td class="feature-content"><p class="feature-title">Track everything</p><p class="feature-description">Keep up with expenses, updates and everything happening along the way.</p></td></tr></table>
+<table role="presentation" width="100%" class="feature"><tr><td class="feature-icon">🧳</td><td class="feature-content"><p class="feature-title">Travel together</p><p class="feature-description">Invite your friends, collaborate on plans and make every adventure a shared one.</p></td></tr></table>
+</td></tr>
+
+<tr><td class="cta-section">
+<a href="https://viadia.in" class="cta">Start Planning Your Adventure ✨</a>
+<p class="cta-subtext">Your next adventure is waiting.</p>
+</td></tr>
+
+<tr><td class="footer">
+<img src="https://viadia.in/assets/email/viadia-punchline.png" alt="Plan. Track. Share. Every Trip." class="footer-logo">
+<p class="footer-text">We're excited to be part of your journey.</p>
+<div class="footer-links"><a href="https://viadia.in">Website</a><a href="{{SUPPORT_URL}}">Help</a><a href="{{PRIVACY_URL}}">Privacy</a></div>
+<p class="footer-text" style="margin-top:15px;">© {{YEAR}} Viadia. All rights reserved.</p>
+</td></tr>
+
+</table></td></tr></table>
+</body>
+</html>

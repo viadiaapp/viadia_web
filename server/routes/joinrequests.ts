@@ -9,8 +9,11 @@ import {
   rejectJoinRequest,
   acceptOwnerInvite,
   declineOwnerInvite,
+  cancelOwnerInvite,
   getApprovalToGrantForUser,
   getApprovalRequestedForUser,
+  getTripJoinRequestsDoc,
+  sweepTripJoinRequestsForTrip,
   getTripOwnerMaster,
   resolveRole,
   hasApprovePermission,
@@ -44,9 +47,12 @@ router.post(
     const userCode = await resolveUserCode(req.uid);
     if (!userCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
 
-    const { tripCode, tripTitle, requesterEmail, requesterName, matchedTravelerName, isNewTraveler } = req.body || {};
+    const { tripCode, tripTitle, requesterEmail, requesterName, matchedTravelerId, matchedTravelerName, isNewTraveler } = req.body || {};
     if (!tripCode || !matchedTravelerName) {
       return res.status(400).json({ error: "Missing tripCode or matchedTravelerName." });
+    }
+    if (!isNewTraveler && !matchedTravelerId) {
+      return res.status(400).json({ error: "Missing matchedTravelerId for an existing traveler match." });
     }
 
     try {
@@ -56,6 +62,7 @@ router.post(
         requesterUserCode: userCode,
         requesterEmail: requesterEmail || "",
         requesterName: requesterName || "Traveler",
+        matchedTravelerId,
         matchedTravelerName,
         isNewTraveler: !!isNewTraveler,
       });
@@ -73,9 +80,9 @@ router.post(
     const inviterUserCode = await resolveUserCode(req.uid);
     if (!inviterUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
 
-    const { tripCode, tripTitle, travelerName, recipientUserCode, recipientEmail } = req.body || {};
-    if (!tripCode || !travelerName || !recipientUserCode) {
-      return res.status(400).json({ error: "Missing tripCode, travelerName, or recipientUserCode." });
+    const { tripCode, tripTitle, travelerId, travelerName, recipientUserCode, recipientEmail } = req.body || {};
+    if (!tripCode || !travelerId || !travelerName || !recipientUserCode) {
+      return res.status(400).json({ error: "Missing tripCode, travelerId, travelerName, or recipientUserCode." });
     }
 
     const master = await getTripOwnerMaster(tripCode);
@@ -89,6 +96,7 @@ router.post(
         tripCode,
         tripTitle: tripTitle || "",
         inviterUserCode,
+        travelerId,
         travelerName,
         recipientUserCode,
         recipientEmail: recipientEmail || "",
@@ -261,6 +269,47 @@ router.get(
     if (!userCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
     const items = await getApprovalRequestedForUser(userCode);
     res.json({ items });
+  })
+);
+
+// Raw trip_join_requests/{tripCode} doc (both owner_invite and traveler_request maps). Contains
+// requester/recipient emails, so requireAuth rather than public -- not scoped to a specific role
+// on the trip beyond that, matching the same looser pattern as a couple of other read endpoints
+// (e.g. /api/users/associations/:userCode) flagged as a known gap worth tightening later.
+router.get(
+  "/:tripCode/doc",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const code = req.params.tripCode.toUpperCase().trim();
+    const doc = await getTripJoinRequestsDoc(code);
+    res.json(doc);
+  })
+);
+
+// Sweeps stale/resolved join-request approval-list entries for a trip that just transitioned to
+// completed/cancelled. Fire-and-forget on the client side; safe to call redundantly (idempotent).
+router.post(
+  "/:tripCode/sweep",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const code = req.params.tripCode.toUpperCase().trim();
+    await sweepTripJoinRequestsForTrip(code);
+    res.json({ success: true });
+  })
+);
+
+router.post(
+  "/:tripCode/:requestId/cancel-invite",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const userCode = await resolveUserCode(req.uid);
+    if (!userCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
+    try {
+      await cancelOwnerInvite(req.params.tripCode, req.params.requestId, userCode);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || "Could not cancel invite." });
+    }
   })
 );
 

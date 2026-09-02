@@ -58,13 +58,16 @@ export const openApiSpec = {
           users: {
             type: "object",
             description:
-              "Keyed by traveler display name (excluding the owner's own name). Each value is a 3-tuple [role, userCode, email].",
+              "Keyed by each traveler's canonical travelerId (a stable generated ID, never a display name -- names can collide or change when a placeholder is later matched to a real account). Includes the owner's own travelerId too, since expenses/splits reference the owner the same way as any other traveler.",
             additionalProperties: {
-              type: "array",
-              items: {},
-              minItems: 3,
-              maxItems: 3,
-              description: "[role: 'owner'|'moderator'|'companion', userCode, email]",
+              type: "object",
+              properties: {
+                role: { type: "string", enum: ["owner", "moderator", "companion"] },
+                userCode: { type: "string", description: "Empty string for a traveler who hasn't linked a real account (or never will -- a permanent placeholder guest is a supported state)." },
+                email: { type: "string" },
+                displayName: { type: "string" },
+              },
+              required: ["role", "userCode", "email", "displayName"],
             },
           },
         },
@@ -229,6 +232,28 @@ export const openApiSpec = {
         responses: { 200: { description: "OK" }, 403: errorResponse },
       },
     },
+    "/api/trips/{code}/user-role/{userCode}": {
+      post: {
+        tags: ["Trips"],
+        summary: "Syncs a userCode's role into user_trip_association_master -- a derived convenience index, not a source of truth. The role written is always re-derived server-side from trip_owner_user_master (the actual source of truth) and never trusted from the client -- no role field exists in the request body at all. Setting your own role is always allowed (it can only ever write what trip_owner_user_master already says about you); setting someone else's requires approveChanges permission on this trip.",
+        security: bearerAuth,
+        parameters: [
+          { name: "code", in: "path", required: true, schema: { type: "string" } },
+          { name: "userCode", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse, 404: errorResponse },
+      },
+      delete: {
+        tags: ["Trips"],
+        summary: "Removes a userCode's entry from user_trip_association_master. Removing your own entry is always allowed (leaving a trip is always your own choice). Removing someone else's requires approveChanges permission, verified against trip_owner_user_master -- if that record no longer exists, this fails closed (403) rather than assuming it's fine.",
+        security: bearerAuth,
+        parameters: [
+          { name: "code", in: "path", required: true, schema: { type: "string" } },
+          { name: "userCode", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse, 403: errorResponse },
+      },
+    },
     "/api/trips/{code}/changes": {
       post: {
         tags: ["Trips"],
@@ -313,25 +338,25 @@ export const openApiSpec = {
     },
     "/api/users/config/{userCode}": {
       parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
-      get: { tags: ["Users"], summary: "Get user config (checklist defaults, unit preferences)", security: bearerAuth, responses: { 200: { description: "OK" }, 404: errorResponse } },
-      put: { tags: ["Users"], summary: "Save user config", security: bearerAuth, responses: { 200: { description: "OK" } } },
+      get: { tags: ["Users"], summary: "Get user config (checklist defaults, unit preferences). Self only -- 403 if userCode isn't the caller's own.", security: bearerAuth, responses: { 200: { description: "OK" }, 403: errorResponse, 404: errorResponse } },
+      put: { tags: ["Users"], summary: "Save user config. Self only -- 403 if userCode isn't the caller's own.", security: bearerAuth, responses: { 200: { description: "OK" }, 403: errorResponse } },
     },
     "/api/users/tripcodes/{userCode}": {
       get: {
         tags: ["Users"],
-        summary: "List the trip codes a user has an entry for (derived from user_specific_trip_list, not a separate stored list)",
+        summary: "List the trip codes a user has an entry for (derived from user_specific_trip_list, not a separate stored list). Self only -- 403 if userCode isn't the caller's own.",
         security: bearerAuth,
         parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
-        responses: { 200: { description: "OK" } },
+        responses: { 200: { description: "OK" }, 403: errorResponse },
       },
     },
     "/api/users/associations/{userCode}": {
       get: {
         tags: ["Users"],
-        summary: "Get a user's role on every trip they're associated with (owned or joined). Path: user_trip_association_master/{userCode}.",
+        summary: "Get a user's role on every trip they're associated with (owned or joined). Path: user_trip_association_master/{userCode}. Self only -- 403 if userCode isn't the caller's own.",
         security: bearerAuth,
         parameters: [{ name: "userCode", in: "path", required: true, schema: { type: "string" } }],
-        responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "object", additionalProperties: { type: "string", enum: ["owner", "moderator", "companion"] } } } } } },
+        responses: { 200: { description: "OK", content: { "application/json": { schema: { type: "object", additionalProperties: { type: "string", enum: ["owner", "moderator", "companion"] } } } } }, 403: errorResponse },
       },
     },
     "/api/subscriptions": {
@@ -355,7 +380,7 @@ export const openApiSpec = {
     "/api/subscriptions/me": {
       get: {
         tags: ["Subscriptions"],
-        summary: "The caller's own current subscription state (user_subscriptions/{userCode}), or null if they've never had one. Read-only -- real subscription grants only ever happen through a verified purchase (see services/subscriptionService.ts's applyPurchasedPlan).",
+        summary: "The caller's own current subscription state (user_subscriptions/{userCode}), or null if they've never had one. Read-only -- real subscription grants only ever happen through a verified purchase (see services/subscriptionService.ts's recordPurchaseAttempt + applySuccessfulTransaction).",
         security: bearerAuth,
         responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
       },
@@ -428,7 +453,7 @@ export const openApiSpec = {
     "/api/payments/razorpay/verify": {
       post: {
         tags: ["Payments"],
-        summary: "Verify a completed Razorpay checkout and apply the subscription (signature-checked). subscriptionCode is generated server-side at this point, not passed in.",
+        summary: "Verify a completed Razorpay checkout and apply the subscription (signature-checked). subscriptionCode is generated server-side at this point, not passed in. Every attempt -- including a signature mismatch -- is recorded in subscription_transaction_master (status 'completed' or 'failed'), not just successes.",
         security: bearerAuth,
         requestBody: {
           content: {
@@ -451,7 +476,7 @@ export const openApiSpec = {
     "/api/payments/razorpay/webhook": {
       post: {
         tags: ["Payments"],
-        summary: "Razorpay server-to-server webhook (payment.captured / order.paid). Verified via X-Razorpay-Signature, not a bearer token.",
+        summary: "Razorpay server-to-server webhook (payment.captured / order.paid / payment.failed, the latter recorded as a failed transaction too). Verified via X-Razorpay-Signature, not a bearer token.",
         parameters: [{ name: "X-Razorpay-Signature", in: "header", required: true, schema: { type: "string" } }],
         responses: { 200: { description: "Received" }, 400: errorResponse },
       },
@@ -460,7 +485,7 @@ export const openApiSpec = {
       post: {
         tags: ["Payments"],
         summary:
-          "Verify a Google Play one-time product purchase (via @capgo/native-purchases on Android) against the Play Developer API, then apply the subscription. All 5 plans (1/2/3/5-year + lifetime) are modeled as Play one-time products, not subscriptions -- this app's own applyPurchasedPlan()/calculateEndDate() compute the multi-year expiry, same as for Razorpay.",
+          "Verify a Google Play one-time product purchase (via @capgo/native-purchases on Android) against the Play Developer API, then apply the subscription. All 5 plans (1/2/3/5-year + lifetime) are modeled as Play one-time products, not subscriptions -- this app's own applySuccessfulTransaction()/calculateEndDate() compute the multi-year expiry, same as for Razorpay. Failed verifications (bad token, purchase not in a completed state) are also recorded in subscription_transaction_master with status 'failed', not silently dropped.",
         security: bearerAuth,
         requestBody: {
           content: {
@@ -495,6 +520,7 @@ export const openApiSpec = {
                   tripTitle: { type: "string" },
                   requesterEmail: { type: "string" },
                   requesterName: { type: "string" },
+                  matchedTravelerId: { type: "string", description: "The existing placeholder's canonical travelerId. Required unless isNewTraveler is true, in which case a new one is minted server-side." },
                   matchedTravelerName: { type: "string" },
                   isNewTraveler: { type: "boolean" },
                 },
@@ -520,11 +546,12 @@ export const openApiSpec = {
                 properties: {
                   tripCode: { type: "string" },
                   tripTitle: { type: "string" },
+                  travelerId: { type: "string", description: "The placeholder traveler's canonical travelerId (already minted when the owner added them)." },
                   travelerName: { type: "string" },
                   recipientUserCode: { type: "string" },
                   recipientEmail: { type: "string" },
                 },
-                required: ["tripCode", "travelerName", "recipientUserCode"],
+                required: ["tripCode", "travelerId", "travelerName", "recipientUserCode"],
               },
             },
           },
@@ -642,6 +669,36 @@ export const openApiSpec = {
         summary: "Everything the caller is currently waiting on someone else's decision for -- their own pending join requests, or invites they've sent as an owner.",
         security: bearerAuth,
         responses: { 200: { description: "OK" }, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/doc": {
+      get: {
+        tags: ["JoinRequests"],
+        summary: "Raw trip_join_requests/{tripCode} doc (both owner_invite and traveler_request maps). Contains requester/recipient emails, so requires auth -- not scoped to a specific role on the trip beyond that.",
+        security: bearerAuth,
+        parameters: [{ name: "tripCode", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "OK" }, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/sweep": {
+      post: {
+        tags: ["JoinRequests"],
+        summary: "Sweeps stale/resolved join-request approval-list entries for a trip that just transitioned to completed/cancelled. Idempotent -- safe to call redundantly.",
+        security: bearerAuth,
+        parameters: [{ name: "tripCode", in: "path", required: true, schema: { type: "string" } }],
+        responses: { 200: { description: "OK" }, 401: errorResponse },
+      },
+    },
+    "/api/joinrequests/{tripCode}/{requestId}/cancel-invite": {
+      post: {
+        tags: ["JoinRequests"],
+        summary: "Inviter withdraws an invite they sent -- distinct from decline, which is the recipient's own action. Only the original inviter may cancel, and only while it's still pending.",
+        security: bearerAuth,
+        parameters: [
+          { name: "tripCode", in: "path", required: true, schema: { type: "string" } },
+          { name: "requestId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        responses: { 200: { description: "OK" }, 400: errorResponse, 401: errorResponse },
       },
     },
     "/api/uploads/presign": {
