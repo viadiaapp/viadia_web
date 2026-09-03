@@ -517,32 +517,6 @@ async function saveTripOwnerMaster(
     .set({ tripCode, owner, allowModification: !!allowModification, ...(users ? { users } : {}) }, { merge: true });
 }
 
-async function setUserTripRole(userCode: string, tripCode: string, role: TripRole): Promise<void> {
-  if (!userCode || !tripCode) return;
-  await adminDb.collection("user_trip_association_master").doc(userCode).set({ [tripCode]: role }, { merge: true });
-}
-
-async function seedUserTripListEntry(userCode: string, tripCode: string): Promise<void> {
-  const existingSnap = await adminDb.collection("user_specific_trip_list").doc(`${userCode}_${tripCode}`).get();
-  if (existingSnap.exists) return;
-
-  const configSnap = await adminDb.collection("user_configs").doc(userCode).get();
-  const globalChecklist = configSnap.exists ? configSnap.data()?.globalChecklist || [] : [];
-  const gcCopy = globalChecklist.map((item: any) => ({
-    ...item,
-    id: item.id || `glob-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    checked: false,
-  }));
-
-  await adminDb
-    .collection("user_specific_trip_list")
-    .doc(`${userCode}_${tripCode}`)
-    .set(
-      { userCode, tripCode, globalChecklist: gcCopy, outfitDetails: { days: {} } },
-      { merge: true }
-    );
-}
-
 // Owner/moderator approves a request: performs the actual userCode/email mapping (and
 // Trip.travelers update for a brand-new traveler), creates the user_trip_association_master
 // entry, and seeds the requester's per-trip checklist snapshot. The request entry is kept (status
@@ -559,30 +533,24 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
   if (!master) throw new Error("Trip not found.");
 
   const travelerId = request.matchedTravelerId;
+  const trip = await getTrip(code);
   let role: TripRole = "companion";
+  let nextUsers: Record<string, TravelerRecord>;
+  let tripUpdate: { travelers?: string[]; travelerNames: Record<string, string> } | null = null;
 
   if (request.isNewTraveler) {
-    const trip = await getTrip(code);
     if (trip) {
       const travelers = trip.travelers || [];
       const nextTravelers = travelers.includes(travelerId) ? travelers : [...travelers, travelerId];
-      await adminDb
-        .collection("trips")
-        .doc(code)
-        .set(
-          {
-            travelers: nextTravelers,
-            travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.matchedTravelerName },
-          },
-          { merge: true }
-        );
+      tripUpdate = {
+        travelers: nextTravelers,
+        travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.matchedTravelerName },
+      };
     }
-
-    const nextUsers: Record<string, TravelerRecord> = {
+    nextUsers = {
       ...(master.users || {}),
       [travelerId]: { role: "companion", userCode: request.requesterUserCode, email: request.requesterEmail, displayName: request.matchedTravelerName },
     };
-    await saveTripOwnerMaster(code, master.owner, master.allowModification, nextUsers);
   } else {
     // Existing placeholder matched: the roster key (travelerId) never changes, so every
     // historical expense/split already pointing at it stays correctly attached -- this is purely
@@ -590,44 +558,52 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
     // assigned to this placeholder is preserved; only identity fields change.
     const priorRecord = master.users?.[travelerId];
     role = priorRecord?.role || "companion";
-
-    const nextUsers: Record<string, TravelerRecord> = {
+    nextUsers = {
       ...(master.users || {}),
       [travelerId]: { role, userCode: request.requesterUserCode, email: request.requesterEmail, displayName: request.requesterName },
     };
-    await saveTripOwnerMaster(code, master.owner, master.allowModification, nextUsers);
-
-    const trip = await getTrip(code);
     if (trip) {
-      await adminDb
-        .collection("trips")
-        .doc(code)
-        .set(
-          { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.requesterName } },
-          { merge: true }
-        );
+      tripUpdate = { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.requesterName } };
     }
   }
 
-  await setUserTripRole(request.requesterUserCode, code, role);
-
-  try {
-    await seedUserTripListEntry(request.requesterUserCode, code);
-  } catch (e) {
-    console.error("Failed seeding user_specific_trip_list after join approval:", e);
+  // Reads needed before the atomic write -- seedUserTripListEntry's own logic (existence check +
+  // globalChecklist template lookup), inlined here since it needs to feed into the same batch.
+  const listDocId = `${request.requesterUserCode}_${code}`;
+  const existingListSnap = await adminDb.collection("user_specific_trip_list").doc(listDocId).get();
+  let listEntry: any = null;
+  if (!existingListSnap.exists) {
+    const configSnap = await adminDb.collection("user_configs").doc(request.requesterUserCode).get();
+    const globalChecklist = configSnap.exists ? configSnap.data()?.globalChecklist || [] : [];
+    const gcCopy = globalChecklist.map((item: any) => ({
+      ...item,
+      id: item.id || `glob-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      checked: false,
+    }));
+    listEntry = { userCode: request.requesterUserCode, tripCode: code, globalChecklist: gcCopy, outfitDetails: { days: {} } };
   }
 
-  await requestsDocRef.update({
+  const batch = adminDb.batch();
+  if (tripUpdate) batch.set(adminDb.collection("trips").doc(code), tripUpdate, { merge: true });
+  batch.set(adminDb.collection("trip_owner_user_master").doc(code), { tripCode: code, owner: master.owner, ownerTravelerId: master.ownerTravelerId, allowModification: master.allowModification, users: nextUsers });
+  batch.set(adminDb.collection("user_trip_association_master").doc(request.requesterUserCode), { [code]: role }, { merge: true });
+  if (listEntry) batch.set(adminDb.collection("user_specific_trip_list").doc(listDocId), listEntry, { merge: true });
+  batch.update(requestsDocRef, {
     [`traveler_request.${requestId}.status`]: "approved",
     [`traveler_request.${requestId}.resolvedAt`]: new Date().toISOString(),
     [`traveler_request.${requestId}.resolvedBy`]: resolvedByUserCode,
   });
+  await batch.commit();
 
+  // Best-effort bookkeeping after the atomic core has already committed -- approval-list tracking
+  // metadata, not "does this person have access" state.
   await adminDb
     .collection("user_trip_approval_list")
     .doc(request.requesterUserCode)
     .update({ approval_requested: FieldValue.arrayRemove(code) })
-    .catch(() => {});
+    .catch((err) => {
+      console.error(`Failed removing approval_requested for ${request.requesterUserCode} on trip ${code}:`, err);
+    });
 
   void cleanupApprovalToGrantForTrip(code);
 }
@@ -683,50 +659,60 @@ export async function acceptOwnerInvite(tripCode: string, requestId: string, acc
     console.error("Failed resolving real name for accepted invite, keeping placeholder name:", e);
   }
 
-  try {
-    const nextUsers: Record<string, TravelerRecord> = { ...(master?.users || {}) };
-    nextUsers[travelerId] = { role, userCode: acceptingUserCode, email: request.recipientEmail || "", displayName: finalName };
-    await saveTripOwnerMaster(code, master?.owner || "", master?.allowModification ?? false, nextUsers);
+  const nextUsers: Record<string, TravelerRecord> = { ...(master?.users || {}) };
+  nextUsers[travelerId] = { role, userCode: acceptingUserCode, email: request.recipientEmail || "", displayName: finalName };
 
-    const trip = await getTrip(code);
-    if (trip) {
-      await adminDb
-        .collection("trips")
-        .doc(code)
-        .set(
-          { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: finalName } },
-          { merge: true }
-        );
-    }
-  } catch (e) {
-    console.error("Failed writing accepted invite identity mapping:", e);
+  const trip = await getTrip(code);
+
+  // Reads needed before the atomic write -- same seedUserTripListEntry logic inlined as
+  // approveJoinRequest, since it needs to feed into the same batch.
+  const listDocId = `${acceptingUserCode}_${code}`;
+  const existingListSnap = await adminDb.collection("user_specific_trip_list").doc(listDocId).get();
+  let listEntry: any = null;
+  if (!existingListSnap.exists) {
+    const configSnap = await adminDb.collection("user_configs").doc(acceptingUserCode).get();
+    const globalChecklist = configSnap.exists ? configSnap.data()?.globalChecklist || [] : [];
+    const gcCopy = globalChecklist.map((item: any) => ({
+      ...item,
+      id: item.id || `glob-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      checked: false,
+    }));
+    listEntry = { userCode: acceptingUserCode, tripCode: code, globalChecklist: gcCopy, outfitDetails: { days: {} } };
   }
 
-  await setUserTripRole(acceptingUserCode, code, role);
-
-  try {
-    await seedUserTripListEntry(acceptingUserCode, code);
-  } catch (e) {
-    console.error("Failed seeding user_specific_trip_list after invite acceptance:", e);
+  // Atomic core: the roster identity update and the resulting access grant either both happen, or
+  // neither does -- this is the fix for the previous version's fail-open behavior, where a failed
+  // identity write still fell through to granting access anyway.
+  const batch = adminDb.batch();
+  batch.set(adminDb.collection("trip_owner_user_master").doc(code), { tripCode: code, owner: master?.owner || "", ownerTravelerId: master?.ownerTravelerId, allowModification: master?.allowModification ?? false, users: nextUsers });
+  if (trip) {
+    batch.set(adminDb.collection("trips").doc(code), { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: finalName } }, { merge: true });
   }
-
-  await requestsDocRef.update({
+  batch.set(adminDb.collection("user_trip_association_master").doc(acceptingUserCode), { [code]: role }, { merge: true });
+  if (listEntry) batch.set(adminDb.collection("user_specific_trip_list").doc(listDocId), listEntry, { merge: true });
+  batch.update(requestsDocRef, {
     [`owner_invite.${requestId}.status`]: "approved",
     [`owner_invite.${requestId}.resolvedAt`]: new Date().toISOString(),
     [`owner_invite.${requestId}.resolvedBy`]: acceptingUserCode,
   });
+  await batch.commit();
 
+  // Best-effort bookkeeping after the atomic core has already committed.
   await Promise.all([
     adminDb
       .collection("user_trip_approval_list")
       .doc(acceptingUserCode)
       .update({ approval_to_grant: FieldValue.arrayRemove(code) })
-      .catch(() => {}),
+      .catch((err) => {
+        console.error(`Failed removing approval_to_grant for ${acceptingUserCode} on trip ${code}:`, err);
+      }),
     adminDb
       .collection("user_trip_approval_list")
       .doc(request.requesterUserCode)
       .update({ approval_requested: FieldValue.arrayRemove(code) })
-      .catch(() => {}),
+      .catch((err) => {
+        console.error(`Failed removing approval_requested for ${request.requesterUserCode} on trip ${code}:`, err);
+      }),
   ]);
 }
 
