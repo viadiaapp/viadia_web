@@ -251,6 +251,31 @@ router.post(
   })
 );
 
+// Deliberately narrow: this is called before the requester is a trip member at all (someone
+// typing a code they got from a friend, deciding whether to join), so it must never expose
+// anything beyond what's needed for that decision -- expenses, checklist, budget, and exchange
+// rates are never included here, unlike GET /:code below, which returns the full trip document.
+router.get(
+  "/:code/preview",
+  asyncHandler(async (req, res) => {
+    const code = normalizeCode(req.params.code);
+    const snap = await adminDb.collection("trips").doc(code).get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Trip not found. Please verify the 6-character alphanumeric code." });
+    }
+    const trip = snap.data()!;
+    res.json({
+      code,
+      title: trip.title || "",
+      startDate: trip.startDate || "",
+      endDate: trip.endDate || "",
+      countries: trip.countries || [],
+      ownerName: trip.ownerName || "Someone",
+      travelerCount: (trip.travelers || []).length,
+    });
+  })
+);
+
 router.get(
   "/:code",
   asyncHandler(async (req, res) => {
