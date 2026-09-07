@@ -2,6 +2,7 @@ import { Router } from "express";
 import { adminDb } from "../firebaseAdmin";
 import { optionalAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
+import { sendSupportAckEmail } from "../services/emailService";
 
 const router = Router();
 
@@ -76,6 +77,10 @@ router.post(
     };
     await adminDb.collection("inbound_messages").doc(ticketId).set(record, { merge: true });
     res.json({ success: true, ticketId });
+
+    if (record.email) {
+      void sendSupportAckEmail({ toEmail: record.email, name: record.name, ticketId });
+    }
   })
 );
 

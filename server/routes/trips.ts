@@ -6,6 +6,7 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sweepTripJoinRequestsForTrip, createOwnerInvite, addUnmappedEmailTripAssociation, getTripJoinRequestsDoc, cancelOwnerInvite } from "../services/joinRequestService";
 import { sendSignupInviteEmail } from "../services/emailService";
 import { deleteObjectsWithPrefix } from "../services/r2";
+import { getTripMemberUserCodes, sendPushNotificationToUsers } from "../services/pushNotificationService";
 
 const router = Router();
 
@@ -138,6 +139,7 @@ router.post(
       return res.status(409).json({ error: `A trip with code ${code} already exists.` });
     }
 
+    const requestedAllowModification = !!(trip as any)?.allowOthersToModify;
     delete (trip as any).allowOthersToModify; // must only ever be stored on trip_owner_user_master.allowModification
     trip.code = code;
     trip.ownerUid = req.uid;
@@ -196,7 +198,7 @@ router.post(
       tripCode: code,
       owner: ownerUserCode,
       ownerTravelerId,
-      allowModification: false,
+      allowModification: requestedAllowModification,
       users,
     });
     batch.set(adminDb.collection("user_trip_association_master").doc(ownerUserCode), { [code]: "owner" }, { merge: true });
@@ -377,7 +379,7 @@ router.put(
     // The atomic core: the trip write and every resulting change-log entry (diffed against
     // whatever's actually in the database, not a possibly-stale frontend copy) either all commit
     // together, or none of them do.
-    const { statusChangedToTerminal } = await adminDb.runTransaction(async (transaction) => {
+    const { statusChangedToTerminal, changes } = await adminDb.runTransaction(async (transaction) => {
       // All reads before any writes, as Firestore transactions require.
       const currentSnap = await transaction.get(tripRef);
       const oldTrip = currentSnap.exists ? currentSnap.data() : null;
@@ -408,12 +410,31 @@ router.put(
         }
       }
 
-      return { statusChangedToTerminal };
+      return { statusChangedToTerminal, changes };
     });
 
     // Side effect, deliberately outside the atomic core -- triggering the join-request sweep
     // doesn't need to be part of "did the trip save correctly."
     if (statusChangedToTerminal) void sweepTripJoinRequestsForTrip(code);
+
+    // Best-effort: notify other trip members when a new expense is added. Excludes the person
+    // who added it. Multiple new expenses in one save (e.g. bulk entry) collapse into a single
+    // notification rather than one per expense.
+    const newExpenseChanges = changes.filter((c) => c.fieldPath === "expenses" && c.operation === "created");
+    if (newExpenseChanges.length > 0) {
+      void getTripMemberUserCodes(code, userCode).then((memberCodes) => {
+        if (memberCodes.length === 0) return;
+        const body =
+          newExpenseChanges.length === 1
+            ? `New expense added: ${newExpenseChanges[0].newValue?.title || "Untitled"}`
+            : `${newExpenseChanges.length} new expenses added`;
+        return sendPushNotificationToUsers(memberCodes, {
+          title: newTrip.title || "Trip update",
+          body,
+          data: { tripCode: code, type: "trip_expense_added" },
+        });
+      });
+    }
 
     res.json({ success: true });
   })
@@ -628,8 +649,8 @@ router.delete(
     const callerUserCode = await resolveUserCode(req.uid);
     if (!callerUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
 
+    const master = await getMaster(code);
     if (targetUserCode !== callerUserCode) {
-      const master = await getMaster(code);
       const callerRole = resolveRole(master, callerUserCode);
       if (!canApproveChanges(callerRole)) {
         return res.status(403).json({ error: "You do not have permission to remove another user's role on this trip." });
@@ -642,6 +663,20 @@ router.delete(
       .update({ [code]: FieldValue.delete() })
       .catch(() => {});
     res.json({ success: true });
+
+    // Best-effort: notify the remaining trip members that this person left/was removed.
+    // Excludes the person who left themselves.
+    void (async () => {
+      const memberCodes = await getTripMemberUserCodes(code, String(targetUserCode));
+      if (memberCodes.length === 0) return;
+      const leavingRecord = Object.values(master?.users || {}).find((u) => u.userCode === targetUserCode);
+      const tripSnap = await adminDb.collection("trips").doc(code).get();
+      await sendPushNotificationToUsers(memberCodes, {
+        title: tripSnap.exists ? tripSnap.data()?.title || "Trip update" : "Trip update",
+        body: `${leavingRecord?.displayName || "A traveler"} left the trip`,
+        data: { tripCode: code, type: "trip_member_left" },
+      });
+    })();
   })
 );
 

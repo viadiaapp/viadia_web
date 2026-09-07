@@ -1,6 +1,7 @@
 import { initializeApp, applicationDefault, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
 
 // server/ is deployed standalone, so this reads the Firebase project id from its own env vars
 // rather than the frontend's firebase-applet-config.json — the defaults match that project.
@@ -19,3 +20,4 @@ const app = getApps().length
 
 export const adminAuth = getAuth(app);
 export const adminDb = databaseId && databaseId !== "(default)" ? getFirestore(app, databaseId) : getFirestore(app);
+export const adminMessaging = getMessaging(app);

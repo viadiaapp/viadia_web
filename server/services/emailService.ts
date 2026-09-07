@@ -117,3 +117,19 @@ export async function sendSignupInviteEmail(params: {
   const text = `${inviterName} invited you to join "${tripTitle}" on Viadia. Sign up with this email address and your invite will be waiting for you.`;
   await sendMail(toEmail, subject, html, text);
 }
+
+// Sent right after a contact-us / support message is saved, so the sender knows it was received
+// and has a reference ID to point back to. Not tied to any account -- guests can submit these too.
+export async function sendSupportAckEmail(params: {
+  toEmail: string;
+  name?: string;
+  ticketId: string;
+}): Promise<void> {
+  const { toEmail, name, ticketId } = params;
+  const nameGreeting = name?.trim() ? `, ${name.trim()}` : "";
+  const subject = `We got your message (${ticketId})`;
+  const html = renderTemplate("support-ack.html", { NAME_GREETING: nameGreeting, TICKET_ID: ticketId });
+  const text = `Thanks for reaching out${nameGreeting}! Our team will get back to you as soon as we can. Your reference ID is ${ticketId}.`;
+  await sendMail(toEmail, subject, html, text);
+}
+

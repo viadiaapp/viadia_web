@@ -2,6 +2,7 @@ import { Router } from "express";
 import { adminDb } from "../firebaseAdmin";
 import { requireAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
+import { registerDeviceToken, unregisterDeviceToken } from "../services/pushNotificationService";
 
 const router = Router();
 
@@ -271,6 +272,41 @@ router.get(
     }
     const snap = await adminDb.collection("user_trip_association_master").doc(req.params.userCode).get();
     res.json(snap.exists ? snap.data() : {});
+  })
+);
+
+// Registers (or refreshes) a push-notification device token for the caller. Idempotent -- the
+// same token from the same device just overwrites its registeredAt timestamp.
+router.post(
+  "/me/device-tokens",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { token, platform } = req.body || {};
+    if (typeof token !== "string" || !token.trim()) {
+      return res.status(400).json({ error: "A device token is required." });
+    }
+    if (platform !== "android" && platform !== "ios" && platform !== "web") {
+      return res.status(400).json({ error: "platform must be one of: android, ios, web." });
+    }
+    const userCode = await resolveUserCode(req.uid);
+    if (!userCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
+
+    await registerDeviceToken(userCode, token.trim(), platform);
+    res.json({ success: true });
+  })
+);
+
+// Unregisters a device token, e.g. on logout, so a signed-out device stops receiving pushes
+// intended for the account it's no longer signed into.
+router.delete(
+  "/me/device-tokens/:token",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const userCode = await resolveUserCode(req.uid);
+    if (!userCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
+
+    await unregisterDeviceToken(userCode, String(req.params.token));
+    res.json({ success: true });
   })
 );
 
