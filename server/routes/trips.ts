@@ -160,17 +160,18 @@ router.post(
       const name = travelerNames[travelerId] || "";
 
       if (isEmailLike(name)) {
-        const foundSnap = await adminDb.collection("users").where("email", "==", name).limit(1).get();
+        const normalizedEmail = name.trim().toLowerCase();
+        const foundSnap = await adminDb.collection("users").where("email", "==", normalizedEmail).limit(1).get();
         if (!foundSnap.empty) {
           const found = foundSnap.docs[0].data();
           // Known account: leave only a name placeholder for now -- the real userCode/email isn't
           // written until they actually accept the invite (acceptOwnerInvite), so no PII sits in
           // these tables while still pending.
           users[travelerId] = { role: "companion", userCode: "", email: "", displayName: name };
-          if (found?.userCode) pendingInvites.push({ travelerId, name, foundUserCode: found.userCode, foundEmail: found.email || name });
+          if (found?.userCode) pendingInvites.push({ travelerId, name, foundUserCode: found.userCode, foundEmail: found.email || normalizedEmail });
         } else {
-          users[travelerId] = { role: "companion", userCode: "", email: name, displayName: name };
-          pendingSignupInvites.push({ travelerId, email: name });
+          users[travelerId] = { role: "companion", userCode: "", email: normalizedEmail, displayName: name };
+          pendingSignupInvites.push({ travelerId, email: normalizedEmail });
         }
       } else {
         users[travelerId] = { role: "companion", userCode: "", email: "", displayName: name };
@@ -777,12 +778,13 @@ router.post(
       toAdd.push({ travelerId, name });
 
       if (isEmailLike(name)) {
-        const foundSnap = await adminDb.collection("users").where("email", "==", name).limit(1).get();
+        const normalizedEmail = name.trim().toLowerCase();
+        const foundSnap = await adminDb.collection("users").where("email", "==", normalizedEmail).limit(1).get();
         if (!foundSnap.empty) {
           const found = foundSnap.docs[0].data();
-          if (found?.userCode) pendingInvites.push({ travelerId, name, foundUserCode: found.userCode, foundEmail: found.email || name });
+          if (found?.userCode) pendingInvites.push({ travelerId, name, foundUserCode: found.userCode, foundEmail: found.email || normalizedEmail });
         } else {
-          pendingSignupInvites.push({ travelerId, email: name });
+          pendingSignupInvites.push({ travelerId, email: normalizedEmail });
         }
       }
     }

@@ -60,7 +60,7 @@ router.post(
         tripCode,
         tripTitle: tripTitle || "",
         requesterUserCode: userCode,
-        requesterEmail: requesterEmail || "",
+        requesterEmail: (requesterEmail || "").trim().toLowerCase(),
         requesterName: requesterName || "Traveler",
         matchedTravelerId,
         matchedTravelerName,
@@ -80,7 +80,8 @@ router.post(
     const inviterUserCode = await resolveUserCode(req.uid);
     if (!inviterUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
 
-    const { tripCode, tripTitle, travelerId, travelerName, recipientUserCode, recipientEmail } = req.body || {};
+    const { tripCode, tripTitle, travelerId, travelerName, recipientUserCode, recipientEmail: rawRecipientEmail } = req.body || {};
+    const recipientEmail = (rawRecipientEmail || "").trim().toLowerCase();
     if (!tripCode || !travelerId || !travelerName || !recipientUserCode) {
       return res.status(400).json({ error: "Missing tripCode, travelerId, travelerName, or recipientUserCode." });
     }
@@ -99,7 +100,7 @@ router.post(
         travelerId,
         travelerName,
         recipientUserCode,
-        recipientEmail: recipientEmail || "",
+        recipientEmail,
       });
 
       if (recipientEmail) {

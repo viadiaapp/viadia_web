@@ -67,7 +67,7 @@ router.post(
     const record = {
       ticketId,
       name: body.name || "",
-      email: body.email || "",
+      email: (body.email || "").trim().toLowerCase(),
       topic: body.topic || "Contact Us Inquiry",
       message: body.message || "",
       userCode: body.userCode || "",

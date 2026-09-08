@@ -45,8 +45,12 @@ router.put(
   asyncHandler(async (req, res) => {
     const ref = adminDb.collection("users").doc(req.uid!);
     const existing = await ref.get();
+    const body = stripRestrictedFields(req.body || {});
+    if (typeof body.email === "string") {
+      body.email = body.email.trim().toLowerCase();
+    }
     const payload = {
-      ...stripRestrictedFields(req.body || {}),
+      ...body,
       uid: req.uid,
       createdAt: existing.exists ? existing.data()!.createdAt : new Date().toISOString(),
       isActive: existing.exists ? existing.data()!.isActive !== false : true,
@@ -66,14 +70,14 @@ router.get(
   "/lookup/by-email",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const targetEmail = (req.query.email as string) || req.userEmail;
+    const targetEmail = ((req.query.email as string) || req.userEmail || "").trim().toLowerCase() || undefined;
     if (!targetEmail) return res.json(null);
 
     const snap = await adminDb.collection("users").where("email", "==", targetEmail).limit(1).get();
     if (snap.empty) return res.json(null);
 
     const data = snap.docs[0].data();
-    if (targetEmail === req.userEmail) {
+    if (targetEmail === (req.userEmail || "").toLowerCase()) {
       return res.json(data);
     }
     res.json({ uid: data.uid, name: data.name, email: data.email, userCode: data.userCode });
@@ -150,7 +154,7 @@ router.post(
   requireAuth,
   asyncHandler(async (req, res) => {
     const uid = req.uid!;
-    const email = req.userEmail;
+    const email = (req.userEmail || "").trim().toLowerCase() || undefined;
 
     let ref = adminDb.collection("users").doc(uid);
     let snap = await ref.get();
