@@ -7,6 +7,7 @@ import { sweepTripJoinRequestsForTrip, createOwnerInvite, addUnmappedEmailTripAs
 import { sendSignupInviteEmail } from "../services/emailService";
 import { deleteObjectsWithPrefix } from "../services/r2";
 import { getTripMemberUserCodes, sendPushNotificationToUsers } from "../services/pushNotificationService";
+import { writeNotificationToUsers } from "../services/inAppNotificationService";
 
 const router = Router();
 
@@ -259,6 +260,7 @@ router.post(
 // rates are never included here, unlike GET /:code below, which returns the full trip document.
 router.get(
   "/:code/preview",
+  optionalAuth,
   asyncHandler(async (req, res) => {
     const code = normalizeCode(req.params.code);
     const snap = await adminDb.collection("trips").doc(code).get();
@@ -266,6 +268,25 @@ router.get(
       return res.status(404).json({ error: "Trip not found. Please verify the 6-character alphanumeric code." });
     }
     const trip = snap.data()!;
+
+    let viewerStatus: "owner" | "member" | "pending" | "none" = "none";
+    const userCode = await resolveUserCode(req.uid);
+    if (userCode) {
+      const masterSnap = await adminDb.collection("trip_owner_user_master").doc(code).get();
+      const master = masterSnap.exists ? (masterSnap.data() as any) : null;
+      if (master?.owner === userCode) {
+        viewerStatus = "owner";
+      } else if (master?.users && Object.values(master.users).some((u: any) => u.userCode === userCode)) {
+        viewerStatus = "member";
+      } else {
+        const requestsDoc = await getTripJoinRequestsDoc(code);
+        const hasPending = Object.values(requestsDoc?.traveler_request || {}).some(
+          (r: any) => r.requesterUserCode === userCode && r.status === "pending"
+        );
+        if (hasPending) viewerStatus = "pending";
+      }
+    }
+
     res.json({
       code,
       title: trip.title || "",
@@ -274,6 +295,7 @@ router.get(
       countries: trip.countries || [],
       ownerName: trip.ownerName || "Someone",
       travelerCount: (trip.travelers || []).length,
+      viewerStatus,
     });
   })
 );
@@ -417,22 +439,51 @@ router.put(
     // doesn't need to be part of "did the trip save correctly."
     if (statusChangedToTerminal) void sweepTripJoinRequestsForTrip(code);
 
-    // Best-effort: notify other trip members when a new expense is added. Excludes the person
-    // who added it. Multiple new expenses in one save (e.g. bulk entry) collapse into a single
-    // notification rather than one per expense.
-    const newExpenseChanges = changes.filter((c) => c.fieldPath === "expenses" && c.operation === "created");
-    if (newExpenseChanges.length > 0) {
-      void getTripMemberUserCodes(code, userCode).then((memberCodes) => {
+    // Best-effort: notify other trip members on any expense addition, modification, or deletion.
+    // Excludes the person who made the change. Multiple changes of the same kind in one save
+    // (e.g. bulk entry) collapse into a single notification rather than one per expense.
+    const expenseChanges = changes.filter((c) => c.fieldPath === "expenses");
+    if (expenseChanges.length > 0) {
+      const created = expenseChanges.filter((c) => c.operation === "created");
+      const updated = expenseChanges.filter((c) => c.operation === "updated");
+      const deleted = expenseChanges.filter((c) => c.operation === "deleted");
+
+      void getTripMemberUserCodes(code, userCode).then(async (memberCodes) => {
         if (memberCodes.length === 0) return;
-        const body =
-          newExpenseChanges.length === 1
-            ? `New expense added: ${newExpenseChanges[0].newValue?.title || "Untitled"}`
-            : `${newExpenseChanges.length} new expenses added`;
-        return sendPushNotificationToUsers(memberCodes, {
-          title: newTrip.title || "Trip update",
-          body,
-          data: { tripCode: code, type: "trip_expense_added" },
-        });
+        const actorName = await resolveUserName(req.uid);
+
+        const jobs: Promise<any>[] = [];
+        if (created.length > 0) {
+          const body =
+            created.length === 1
+              ? `${actorName} added a new expense: ${created[0].newValue?.title || "Untitled"}`
+              : `${actorName} added ${created.length} new expenses`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_expense_added" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "expense_added", title: "Expense added", body, actorName })
+          );
+        }
+        if (updated.length > 0) {
+          const body =
+            updated.length === 1
+              ? `${actorName} updated an expense: ${updated[0].newValue?.title || "Untitled"}`
+              : `${actorName} updated ${updated.length} expenses`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_expense_updated" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "expense_updated", title: "Expense updated", body, actorName })
+          );
+        }
+        if (deleted.length > 0) {
+          const body =
+            deleted.length === 1
+              ? `${actorName} deleted an expense: ${deleted[0].newValue?.title || "Untitled"}`
+              : `${actorName} deleted ${deleted.length} expenses`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_expense_deleted" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "expense_deleted", title: "Expense deleted", body, actorName })
+          );
+        }
+        return Promise.all(jobs);
       });
     }
 

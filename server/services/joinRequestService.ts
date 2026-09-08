@@ -1,6 +1,7 @@
 import { adminDb } from "../firebaseAdmin";
 import { FieldValue } from "firebase-admin/firestore";
 import { getTripMemberUserCodes, sendPushNotificationToUsers } from "./pushNotificationService";
+import { writeNotificationToUsers } from "./inAppNotificationService";
 
 // Mirrors src/types.ts and src/lib/db.ts exactly -- this is the server-side counterpart to the
 // frontend's join-request implementation (see docs/firebase-blueprint-v2.json's
@@ -601,11 +602,22 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
   void getTripMemberUserCodes(code, request.requesterUserCode).then((memberCodes) => {
     if (memberCodes.length === 0) return;
     const joinerName = request.isNewTraveler ? request.matchedTravelerName : request.requesterName;
-    return sendPushNotificationToUsers(memberCodes, {
-      title: trip?.title || "Trip update",
-      body: `${joinerName} joined the trip`,
-      data: { tripCode: code, type: "trip_member_joined" },
-    });
+    const body = `${joinerName} joined the trip`;
+    return Promise.all([
+      sendPushNotificationToUsers(memberCodes, {
+        title: trip?.title || "Trip update",
+        body,
+        data: { tripCode: code, type: "trip_member_joined" },
+      }),
+      writeNotificationToUsers(memberCodes, {
+        tripCode: code,
+        tripTitle: trip?.title || "Trip",
+        type: "member_joined",
+        title: "New member joined",
+        body,
+        actorName: joinerName,
+      }),
+    ]);
   });
 
   // Best-effort bookkeeping after the atomic core has already committed -- approval-list tracking
@@ -713,11 +725,22 @@ export async function acceptOwnerInvite(tripCode: string, requestId: string, acc
   // Best-effort: notify existing trip members that someone joined. Excludes the joiner.
   void getTripMemberUserCodes(code, acceptingUserCode).then((memberCodes) => {
     if (memberCodes.length === 0) return;
-    return sendPushNotificationToUsers(memberCodes, {
-      title: trip?.title || "Trip update",
-      body: `${finalName} joined the trip`,
-      data: { tripCode: code, type: "trip_member_joined" },
-    });
+    const body = `${finalName} joined the trip`;
+    return Promise.all([
+      sendPushNotificationToUsers(memberCodes, {
+        title: trip?.title || "Trip update",
+        body,
+        data: { tripCode: code, type: "trip_member_joined" },
+      }),
+      writeNotificationToUsers(memberCodes, {
+        tripCode: code,
+        tripTitle: trip?.title || "Trip",
+        type: "member_joined",
+        title: "New member joined",
+        body,
+        actorName: finalName,
+      }),
+    ]);
   });
 
   // Best-effort bookkeeping after the atomic core has already committed.
