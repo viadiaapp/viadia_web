@@ -31,6 +31,16 @@ export function getMysqlPool(): mysql.Pool {
       enableKeepAlive: true,
       keepAliveInitialDelay: 10000,
     });
+    // Pins every pooled connection's MySQL *session* to UTC (not just the client-side date
+    // parsing) -- without this, a query like `WHERE created_at >= UTC_DATE()` compares an
+    // explicitly-UTC function result against a TIMESTAMP column displayed in whatever the
+    // server's default session time zone happens to be, which is silently wrong if that isn't
+    // UTC. Runs once per new physical connection the pool opens, not per query.
+    pool.on("connection", (connection) => {
+      connection.query("SET time_zone = '+00:00'").catch((err) => {
+        console.error("Failed to set MySQL session time zone to UTC:", err?.message || err);
+      });
+    });
   }
   return pool;
 }

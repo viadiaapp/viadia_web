@@ -44,3 +44,19 @@ export async function optionalAuth(req: Request, res: Response, next: NextFuncti
   }
   next();
 }
+
+// Lightweight stopgap for admin-only endpoints (e.g. destination-submission moderation) that
+// currently have no dedicated admin UI -- called via curl/Postman with a shared secret in a
+// header, rather than left completely unauthenticated. Not a substitute for real admin auth
+// once an actual admin interface exists.
+export function requireAdminSecret(req: Request, res: Response, next: NextFunction) {
+  const configured = process.env.ADMIN_API_SECRET;
+  if (!configured) {
+    return res.status(503).json({ error: "Admin endpoints are not configured on this server." });
+  }
+  const provided = req.headers["x-admin-secret"];
+  if (provided !== configured) {
+    return res.status(401).json({ error: "Missing or invalid admin secret." });
+  }
+  next();
+}

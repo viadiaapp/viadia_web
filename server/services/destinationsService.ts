@@ -16,6 +16,7 @@ export interface DestinationRow {
   timezone: string | null;
   currency_code: string | null;
   is_active: boolean;
+  source: "curated" | "user_submitted";
 }
 
 export interface DestinationContentRow {
@@ -97,6 +98,42 @@ export async function findDestinationByCountryAndName(countryCode: string, name:
   return rows.length > 0 ? (rows[0] as DestinationRow) : null;
 }
 
+export interface CuratedDestinationSummary {
+  destination_id: string;
+  country_code: string;
+  name: string;
+  rank: number | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+// Replaces the static per-country JSON files -- one query covers every requested country at
+// once. Only curated destinations (the migrated JSON data); user-submitted approved entries
+// have their own separate "visited by other travellers" list/endpoint. Ordered by rank with
+// nulls sorted last (MySQL has no native NULLS LAST -- `(rank IS NULL) ASC` sorts non-null ranks
+// before null ones, matching Postgres's NULLS LAST behavior).
+export async function getCuratedDestinationsForCountries(countryCodes: string[]): Promise<Map<string, CuratedDestinationSummary[]>> {
+  const cleaned = Array.from(new Set(countryCodes.map((c) => c.trim().toUpperCase()).filter(Boolean)));
+  const result = new Map<string, CuratedDestinationSummary[]>();
+  if (cleaned.length === 0) return result;
+
+  const pool = getMysqlPool();
+  const placeholders = cleaned.map(() => "?").join(", ");
+  const [rows]: any = await pool.query(
+    `SELECT destination_id, country_code, name, rank, latitude, longitude
+     FROM destinations
+     WHERE country_code IN (${placeholders}) AND source = 'curated' AND is_active = 1
+     ORDER BY country_code ASC, (rank IS NULL) ASC, rank ASC, name ASC`,
+    cleaned
+  );
+
+  for (const code of cleaned) result.set(code, []);
+  for (const row of rows as CuratedDestinationSummary[]) {
+    result.get(row.country_code)?.push(row);
+  }
+  return result;
+}
+
 export async function getDestinationById(destinationId: string): Promise<DestinationRow | null> {
   const pool = getMysqlPool();
   const [rows]: any = await pool.query("SELECT * FROM destinations WHERE destination_id = ? LIMIT 1", [destinationId]);
@@ -152,6 +189,69 @@ export async function getDestinationFull(destinationId: string, languageCode = "
   return { destination, content, image };
 }
 
+export interface BatchImageLookupItem {
+  name: string;
+  countryCode: string;
+}
+
+export interface BatchImageLookupResult {
+  name: string;
+  countryCode: string;
+  imageUrl: string | null;
+  imageUrlSmall: string | null;
+}
+
+// Strictly read-only: looks up whichever of the given (name, countryCode) pairs already have a
+// destination row AND a cached cover image, in a single query. Never inserts a destination and
+// never triggers content/image generation -- unlike resolveDestination()/the /resolve endpoint,
+// this is safe to call for a whole list of destinations at once without risking N simultaneous
+// Gemini/Unsplash calls for the ones that aren't cached yet. Anything not found (or found but
+// without an image yet) is simply omitted from the result rather than being generated on the fly.
+export async function batchGetCachedImages(items: BatchImageLookupItem[]): Promise<BatchImageLookupResult[]> {
+  const cleaned = items
+    .map((item) => ({ name: item.name.trim(), countryCode: item.countryCode.trim().toUpperCase(), slug: slugify(item.name) }))
+    .filter((item) => item.name && item.countryCode && item.slug);
+  if (cleaned.length === 0) return [];
+
+  const pool = getMysqlPool();
+  // (country_code, slug) IN ((?, ?), (?, ?), ...) -- one round trip for the whole list, rather
+  // than one query per destination.
+  const tuplePlaceholders = cleaned.map(() => "(?, ?)").join(", ");
+  const params = cleaned.flatMap((item) => [item.countryCode, item.slug]);
+
+  const [rows]: any = await pool.query(
+    `SELECT d.country_code, d.slug, d.name AS db_name, i.image_url, i.image_url_small
+     FROM destinations d
+     JOIN destination_images i
+       ON i.destination_id = d.destination_id
+      AND i.image_type = 'cover'
+      AND i.is_active = 1
+     WHERE (d.country_code, d.slug) IN (${tuplePlaceholders})`,
+    params
+  );
+
+  // Match rows back to the caller's original (name, countryCode) pairs via the same slug the
+  // query matched on, so the response uses the name the caller passed in rather than requiring
+  // them to also know each destination's stored db name.
+  const bySlugAndCountry = new Map<string, any>(
+    rows.map((r: any) => [`${r.country_code}_${r.slug}`, r])
+  );
+
+  const results: BatchImageLookupResult[] = [];
+  for (const item of cleaned) {
+    const row = bySlugAndCountry.get(`${item.countryCode}_${item.slug}`);
+    if (row) {
+      results.push({
+        name: item.name,
+        countryCode: item.countryCode,
+        imageUrl: row.image_url,
+        imageUrlSmall: row.image_url_small,
+      });
+    }
+  }
+  return results;
+}
+
 interface InsertDestinationParams {
   isoCode: string;
   name: string;
@@ -163,6 +263,7 @@ interface InsertDestinationParams {
   regionName?: string | null;
   timezone?: string | null;
   currencyCode?: string | null;
+  source?: "curated" | "user_submitted";
 }
 
 export async function insertNewDestination(params: InsertDestinationParams): Promise<DestinationRow> {
@@ -171,8 +272,8 @@ export async function insertNewDestination(params: InsertDestinationParams): Pro
   const { id, slug } = await generateUniqueDestinationId(params.isoCode, baseSlug);
   await pool.query(
     `INSERT INTO destinations
-      (destination_id, country_code, name, slug, rank, latitude, longitude, destination_type, state_name, region_name, timezone, currency_code, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE)`,
+      (destination_id, country_code, name, slug, rank, latitude, longitude, destination_type, state_name, region_name, timezone, currency_code, is_active, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)`,
     [
       id,
       params.isoCode.toUpperCase(),
@@ -186,6 +287,7 @@ export async function insertNewDestination(params: InsertDestinationParams): Pro
       params.regionName ?? null,
       params.timezone ?? null,
       params.currencyCode ?? null,
+      params.source ?? "curated",
     ]
   );
   const created = await getDestinationById(id);
