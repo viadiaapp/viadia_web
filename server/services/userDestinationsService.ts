@@ -133,6 +133,47 @@ async function getUserDestinationById(id: number): Promise<UserDestinationRow | 
   return rows.length > 0 ? (rows[0] as UserDestinationRow) : null;
 }
 
+// For a destination Gemini suggests during itinerary generation (see routes/gemini.ts). Not a
+// human free-typed submission, so it doesn't go through the pending-review queue -- but it does
+// still get dedup-checked against existing destinations first (same function /resolve's trusted
+// path uses), so Gemini re-suggesting an already-known place (curated or previously approved)
+// never creates a duplicate row.
+export async function resolveAiGeneratedDestination(
+  name: string,
+  countryCode: string
+): Promise<DestinationRow> {
+  const existing = await findDestinationByCountryAndName(countryCode, name);
+  if (existing) {
+    void backfillContentIfMissing(existing.destination_id, name, countryCode);
+    void backfillImageIfMissing(existing.destination_id, name, countryCode);
+    return existing;
+  }
+
+  const created = await insertNewDestination({
+    isoCode: countryCode,
+    name,
+    source: "user_submitted",
+  });
+
+  // Auto-approved rather than queued as 'pending' -- this is our own system generating the
+  // suggestion, not open human input, so it skips the moderation gate entirely. Still recorded
+  // in user_destinations (status already 'approved') so it surfaces under "Destinations visited
+  // by other travellers" for future users, and so the audit trail distinguishes this from a
+  // human-reviewed approval.
+  const pool = getMysqlPool();
+  await pool.query(
+    `INSERT INTO user_destinations
+      (submitted_name, submitted_slug, country_code, resolved_country_name, submitted_by_user_code, status, destination_id, admin_notes, reviewed_at)
+     VALUES (?, ?, ?, ?, 'system', 'approved', ?, 'Auto-approved via AI itinerary generation', UTC_TIMESTAMP())`,
+    [name, slugify(name), countryCode.toUpperCase(), countryCode.toUpperCase(), created.destination_id]
+  );
+
+  void backfillContentIfMissing(created.destination_id, name, countryCode);
+  void backfillImageIfMissing(created.destination_id, name, countryCode);
+
+  return created;
+}
+
 export async function approveUserDestination(
   id: number,
   reviewedBy: string,

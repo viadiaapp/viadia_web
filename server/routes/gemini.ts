@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { GoogleGenAI, Type } from "@google/genai";
+import { resolveAiGeneratedDestination } from "../services/userDestinationsService";
 
 const router = Router();
 
@@ -239,8 +240,53 @@ router.post("/suggest-destinations", async (req, res) => {
   }
 });
 
+interface ExistingDestinationInput {
+  name: string;
+  countryCode: string;
+  nights: number;
+  arrivalDate: string;
+  departureDate: string;
+}
+
+// Computes which date ranges within the trip aren't covered by any existing destination card --
+// used so Gemini is handed the exact gap(s) to fill rather than asked to infer them itself.
+// Verified against empty/partial/complete/unsorted-input cases before integrating.
+function computeUncoveredRanges(
+  tripStartDate: string,
+  tripEndDate: string,
+  existingDestinations: ExistingDestinationInput[]
+): { start: string; end: string }[] {
+  const sorted = existingDestinations.slice().sort((a, b) => a.arrivalDate.localeCompare(b.arrivalDate));
+  const ranges: { start: string; end: string }[] = [];
+  let cursor = tripStartDate;
+
+  for (const dest of sorted) {
+    if (dest.arrivalDate > cursor) {
+      ranges.push({ start: cursor, end: dest.arrivalDate });
+    }
+    if (dest.departureDate > cursor) {
+      cursor = dest.departureDate;
+    }
+  }
+  if (cursor < tripEndDate) {
+    ranges.push({ start: cursor, end: tripEndDate });
+  }
+  return ranges.filter((r) => r.start < r.end);
+}
+
 router.post("/generate-itinerary", async (req, res) => {
-  const { tripTitle, countries, startDate, endDate, cities, pace = "moderate", interests = [], customNotes = "" } = req.body;
+  const {
+    tripTitle,
+    countries,
+    startDate,
+    endDate,
+    cities,
+    pace = "moderate",
+    interests = [],
+    customNotes = "",
+    existingDestinations = [],
+    unplannedDaysHint = "",
+  } = req.body;
 
   if (!countries || !Array.isArray(countries) || countries.length === 0) {
     return res.status(400).json({ error: "Trip country list is required." });
@@ -250,9 +296,29 @@ router.post("/generate-itinerary", async (req, res) => {
   }
 
   try {
+    const existingList: ExistingDestinationInput[] = Array.isArray(existingDestinations) ? existingDestinations : [];
+    const gaps = computeUncoveredRanges(startDate, endDate, existingList);
+
+    let destinationContext: string;
+    if (existingList.length === 0) {
+      destinationContext = `No destinations have been chosen yet for this trip. Suggest a full set of well-suited destinations (cities/towns) covering the entire trip duration from ${startDate} to ${endDate}, within the countries: ${countries.join(", ")}. For each suggested destination, decide a reasonable number of nights.`;
+    } else if (gaps.length === 0) {
+      const fixedList = existingList.map((d) => `- ${d.name} (${d.countryCode}): ${d.arrivalDate} to ${d.departureDate} (${d.nights} night${d.nights === 1 ? "" : "s"})`).join("\n");
+      destinationContext = `The trip's destinations are already fully planned and fixed:\n${fixedList}\nDo NOT suggest any additional or alternative destinations. Generate activities only within these existing destinations and their date ranges.`;
+    } else {
+      const fixedList = existingList.map((d) => `- ${d.name} (${d.countryCode}): ${d.arrivalDate} to ${d.departureDate} (${d.nights} night${d.nights === 1 ? "" : "s"}) -- FIXED, do not change`).join("\n");
+      const gapList = gaps.map((g) => `- ${g.start} to ${g.end}`).join("\n");
+      destinationContext = `The following destinations are already fixed and must not be changed:\n${fixedList}\n\nThe following date ranges are NOT yet covered by any destination and need new destinations suggested to fill them:\n${gapList}\n\nFor each uncovered range, suggest one or more well-suited destinations (within ${countries.join(", ")}) to fill it, with nights summing to that range's length.`;
+    }
+
+    const hintContext = unplannedDaysHint && unplannedDaysHint.trim().length > 0
+      ? `For any newly suggested destinations, follow this specific user guidance: "${unplannedDaysHint.trim()}".`
+      : "";
+    // cities/customNotes: kept for backward compatibility with trips that don't use the
+    // Destinations tab at all (existingList is always empty for those).
     const cityContext = cities && cities.length > 0
-      ? `Target cities / destinations requested by the user: ${Array.isArray(cities) ? cities.join(", ") : cities}.`
-      : `Explore key highlights across the countries: ${countries.join(", ")}.`;
+      ? `Additional city/destination preferences noted by the user: ${Array.isArray(cities) ? cities.join(", ") : cities}.`
+      : "";
     const interestContext = interests && interests.length > 0 ? `User interests and focus areas: ${interests.join(", ")}.` : "";
     const notesContext = customNotes && customNotes.trim().length > 0 ? `Specific user requests/preferences: "${customNotes.trim()}".` : "";
     const paceGuidance =
@@ -265,16 +331,18 @@ router.post("/generate-itinerary", async (req, res) => {
     const prompt = `You are generating a daily travel itinerary for a trip titled "${tripTitle || "Vacation"}".
 Trip Countries: ${countries.join(", ")}
 Trip Duration: From ${startDate} to ${endDate}.
+${destinationContext}
+${hintContext}
 ${cityContext}
 ${interestContext}
 ${notesContext}
 Pace: ${paceGuidance}
 
 CRITICAL RULES:
-1. For every day between ${startDate} and ${endDate} inclusive, generate realistic itinerary activity stops.
+1. For every day between ${startDate} and ${endDate} inclusive, generate realistic itinerary activity stops (across both the fixed destinations and any newly suggested ones).
 2. DO NOT include airline flights, trains between countries/cities, or hotel check-in/check-out vouchers (the user manages flights and hotel bookings separately).
 3. Focus purely on sightseeing attractions, historical landmarks, cultural activities, nature walks, scenic viewpoints, neighborhood walking tours, local markets, and renowned dining experiences.
-4. For EACH stop, provide:
+4. For EACH activity stop, provide:
    - "date": the specific date in "YYYY-MM-DD" format (must be within ${startDate} and ${endDate}).
    - "time": the start time of the activity in 24-hour "HH:MM" format (e.g. "09:30", "14:00", "19:00").
    - "title": clear, evocative landmark or activity name (e.g. "Louvre Museum & Courtyard", "Fushimi Inari Shrine Hike", "Trastevere Evening Food Tour").
@@ -284,7 +352,8 @@ CRITICAL RULES:
    - "lng": precise numeric longitude coordinate.
    - "city": city or district name.
    - "category": category type (e.g. "Sightseeing", "Culture", "Food & Dining", "Nature", "Shopping", "Scenic View").
-5. Sequence activities logically within each day geographically to minimize unnecessary travel back and forth.`;
+5. Sequence activities logically within each day geographically to minimize unnecessary travel back and forth.
+6. If you suggest any new destinations, use each place's standard, canonical spelling (e.g. "Udaipur", not a phonetic or alternate spelling) -- this must stay consistent with how the same place would be spelled in any other, separate itinerary you might generate.`;
 
     const parsed = await generateGeminiWithFallback(prompt, {
       systemInstruction: "You are an expert global travel guide creating realistic, geographically coherent travel itineraries.",
@@ -293,6 +362,19 @@ CRITICAL RULES:
         type: Type.OBJECT,
         properties: {
           tripSummary: { type: Type.STRING, description: "Brief 2-3 sentence overview of the trip experience." },
+          suggestedDestinations: {
+            type: Type.ARRAY,
+            description: "Only newly suggested destinations to fill uncovered trip days -- empty array if the trip's destinations were already fully fixed.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING, description: "Canonical, standard spelling of the destination name." },
+                countryCode: { type: Type.STRING, description: "ISO 3166-1 alpha-2 country code, uppercase (e.g. 'IN')." },
+                nights: { type: Type.NUMBER, description: "Number of nights allocated to this destination." },
+              },
+              required: ["name", "countryCode", "nights"],
+            },
+          },
           itinerary: {
             type: Type.ARRAY,
             description: "Array of scheduled activity items.",
@@ -313,17 +395,43 @@ CRITICAL RULES:
             },
           },
         },
-        required: ["tripSummary", "itinerary"],
+        required: ["tripSummary", "suggestedDestinations", "itinerary"],
       },
     });
 
     if (parsed && Array.isArray(parsed.itinerary) && parsed.itinerary.length > 0) {
-      return res.json(parsed);
+      // Resolve each suggested destination against the real destinations table -- dedup-checked,
+      // auto-approved on a genuine miss (see resolveAiGeneratedDestination). Runs sequentially
+      // (not Promise.all) so duplicate names within Gemini's own suggested list can't both pass
+      // the dedup check and insert twice before either has committed.
+      const resolvedDestinations = [];
+      for (const suggestion of parsed.suggestedDestinations || []) {
+        if (!suggestion?.name || !suggestion?.countryCode) continue;
+        try {
+          const resolved = await resolveAiGeneratedDestination(suggestion.name, suggestion.countryCode);
+          resolvedDestinations.push({
+            destinationId: resolved.destination_id,
+            name: resolved.name,
+            countryCode: resolved.country_code,
+            nights: suggestion.nights,
+            latitude: resolved.latitude,
+            longitude: resolved.longitude,
+          });
+        } catch (err: any) {
+          console.error(`Failed to resolve AI-suggested destination "${suggestion.name}":`, err?.message || err);
+        }
+      }
+
+      return res.json({
+        tripSummary: parsed.tripSummary,
+        itinerary: parsed.itinerary,
+        suggestedDestinations: resolvedDestinations,
+      });
     }
     throw new Error("Invalid output from Gemini itinerary generator.");
   } catch (err: any) {
     console.warn("Serving curated fallback itinerary due to Gemini error:", err?.message);
-    res.json(generateCuratedFallbackItinerary({ tripTitle, countries, startDate, endDate, cities, pace, interests }));
+    res.json({ ...generateCuratedFallbackItinerary({ tripTitle, countries, startDate, endDate, cities, pace, interests }), suggestedDestinations: [] });
   }
 });
 
