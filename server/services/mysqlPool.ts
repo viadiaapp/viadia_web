@@ -36,9 +36,20 @@ export function getMysqlPool(): mysql.Pool {
     // explicitly-UTC function result against a TIMESTAMP column displayed in whatever the
     // server's default session time zone happens to be, which is silently wrong if that isn't
     // UTC. Runs once per new physical connection the pool opens, not per query.
+    //
+    // IMPORTANT: the pool's raw 'connection' event hands back a callback-style connection object
+    // -- NOT the promise-wrapped kind mysql2/promise otherwise gives you everywhere else. Calling
+    // .query(sql).catch(...) on it throws synchronously ("not a promise") inside this handler,
+    // which was silently hanging every subsequent query on that connection indefinitely (empirically
+    // reproduced and confirmed against a real MariaDB instance -- this was a real, production
+    // 504-causing bug, not theoretical). Must use the callback signature instead.
     pool.on("connection", (connection) => {
-      connection.query("SET time_zone = '+00:00'").catch((err) => {
-        console.error("Failed to set MySQL session time zone to UTC:", err?.message || err);
+      // See the comment above: types claim promise-based, runtime is callback-style for this
+      // specific event -- confirmed empirically, not a real type-safety concern.
+      (connection as any).query("SET time_zone = '+00:00'", (err: any) => {
+        if (err) {
+          console.error("Failed to set MySQL session time zone to UTC:", err?.message || err);
+        }
       });
     });
   }
