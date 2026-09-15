@@ -379,6 +379,25 @@ function computeTripChanges(oldTrip: any, newTrip: any): ChangeEntry[] {
     }
   }
 
+  // --- Destinations (Planner.tsx's Destinations tab) ---
+  const oldDestinations = new Map((oldTrip?.destinations || []).map((d: any) => [d.id, d]));
+  for (const dest of newTrip.destinations || []) {
+    const prior = oldDestinations.get(dest.id);
+    if (!prior || JSON.stringify(prior) !== JSON.stringify(dest)) {
+      changes.push({
+        operation: prior ? "updated" : "created",
+        fieldPath: "destinations",
+        newValue: { cityName: dest.cityName, countryName: dest.countryName, nights: dest.nights },
+      });
+    }
+  }
+  const newDestinationIds = new Set((newTrip.destinations || []).map((d: any) => d.id));
+  for (const dest of oldTrip?.destinations || []) {
+    if (!newDestinationIds.has(dest.id)) {
+      changes.push({ operation: "deleted", fieldPath: "destinations", newValue: { cityName: dest.cityName, countryName: dest.countryName } });
+    }
+  }
+
   return changes;
 }
 
