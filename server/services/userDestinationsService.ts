@@ -232,6 +232,38 @@ export interface ApprovedUserDestinationSummary {
   image_url: string | null;
 }
 
+export interface MyUserDestinationSummary {
+  id: number;
+  name: string;
+  status: UserDestinationStatus;
+  destination_id: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  image_url: string | null;
+}
+
+// A specific user's own submissions for a country, regardless of approval status -- this is
+// what makes a just-submitted destination persist across sessions/remounts for the submitter
+// specifically, rather than only existing in local React state. Excludes rejected entries
+// deliberately (a rejection may be for inappropriate content; it shouldn't keep resurfacing in
+// the submitter's own list as if it were a valid place). A still-pending submission has no
+// destination_id yet, so this LEFT JOINs -- name comes from user_destinations.submitted_name
+// (always present) rather than destinations.name (only present once approved).
+export async function getMySubmissionsForCountry(userCode: string, countryCode: string): Promise<MyUserDestinationSummary[]> {
+  const pool = getMysqlPool();
+  const [rows]: any = await pool.query(
+    `SELECT ud.id, ud.submitted_name AS name, ud.status, ud.destination_id, d.latitude, d.longitude, i.image_url
+     FROM user_destinations ud
+     LEFT JOIN destinations d ON d.destination_id = ud.destination_id
+     LEFT JOIN destination_images i
+       ON i.destination_id = d.destination_id AND i.image_type = 'cover' AND i.is_active = 1
+     WHERE ud.submitted_by_user_code = ? AND ud.country_code = ? AND ud.status != 'rejected'
+     ORDER BY ud.created_at ASC`,
+    [userCode, countryCode.toUpperCase()]
+  );
+  return rows as MyUserDestinationSummary[];
+}
+
 // The "User Traveled Destinations" list for a country -- only ever approved entries, joined
 // against destinations/destination_images for display data.
 export async function getApprovedUserDestinationsForCountry(countryCode: string): Promise<ApprovedUserDestinationSummary[]> {

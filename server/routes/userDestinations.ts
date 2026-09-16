@@ -8,6 +8,7 @@ import {
   approveUserDestination,
   rejectUserDestination,
   getApprovedUserDestinationsForCountry,
+  getMySubmissionsForCountry,
 } from "../services/userDestinationsService";
 
 const router = Router();
@@ -69,6 +70,26 @@ router.get(
       return res.status(400).json({ error: "country query parameter is required." });
     }
     const results = await getApprovedUserDestinationsForCountry(country);
+    res.json({ results });
+  })
+);
+
+// A user's own submissions for a country, regardless of status -- what lets a just-submitted
+// destination persist across sessions/remounts for the submitter specifically, rather than
+// disappearing the moment local component state resets.
+router.get(
+  "/mine",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const country = req.query.country;
+    if (!country || typeof country !== "string") {
+      return res.status(400).json({ error: "country query parameter is required." });
+    }
+    const userCode = await resolveUserCode(req.uid);
+    if (!userCode) {
+      return res.status(403).json({ error: "Could not resolve your user account." });
+    }
+    const results = await getMySubmissionsForCountry(userCode, country);
     res.json({ results });
   })
 );
