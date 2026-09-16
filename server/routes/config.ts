@@ -4,7 +4,7 @@ import { asyncHandler } from "../utils/asyncHandler";
 
 const router = Router();
 
-// Path: app_config/ads -- { bannerAdsEnabled: boolean, interstitialAdsEnabled: boolean }.
+// Path: app_config/ads -- { bannerAdsEnabled: boolean, interstitialAdsEnabled: boolean, rewardedAdsEnabled: boolean }.
 // Public, no auth required -- every client (signed-in or guest) needs this to decide whether to
 // show ads at all, read once per app session. Missing doc, or a missing/non-false field, defaults
 // to enabled (ads are the default state; someone has to deliberately flip this off in Firestore,
@@ -17,6 +17,7 @@ router.get(
     res.json({
       bannerAdsEnabled: data.bannerAdsEnabled !== false,
       interstitialAdsEnabled: data.interstitialAdsEnabled !== false,
+      rewardedAdsEnabled: data.rewardedAdsEnabled !== false,
     });
   })
 );

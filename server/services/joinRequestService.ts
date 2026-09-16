@@ -142,13 +142,14 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
 
   const requestsDocRef = adminDb.collection("trip_join_requests").doc(tripCode);
   const masterRef = adminDb.collection("trip_owner_user_master").doc(tripCode);
+  let approverUserCodes: Set<string> = new Set();
 
   await adminDb.runTransaction(async (transaction) => {
     const masterSnap = await transaction.get(masterRef);
     if (!masterSnap.exists) throw new Error("Trip not found.");
     const master = masterSnap.data() as TripOwnerUserMaster;
 
-    const approverUserCodes = new Set<string>();
+    approverUserCodes = new Set<string>();
     if (master.owner) approverUserCodes.add(master.owner);
     for (const record of Object.values(master.users || {})) {
       if (record.role === "moderator" && record.userCode) approverUserCodes.add(record.userCode);
@@ -168,6 +169,26 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
       { merge: true }
     );
   });
+
+  // Best-effort: notify whoever can approve this that someone wants to join.
+  if (approverUserCodes.size > 0) {
+    const body = `${record.requesterName} wants to join ${record.tripTitle || "your trip"}`;
+    void Promise.all([
+      sendPushNotificationToUsers(Array.from(approverUserCodes), {
+        title: record.tripTitle || "Trip update",
+        body,
+        data: { tripCode, type: "trip_join_request_received" },
+      }),
+      writeNotificationToUsers(Array.from(approverUserCodes), {
+        tripCode,
+        tripTitle: record.tripTitle || "Trip",
+        type: "join_request_received",
+        title: "New join request",
+        body,
+        actorName: record.requesterName,
+      }),
+    ]);
+  }
 
   return record;
 }
@@ -234,6 +255,24 @@ export async function createOwnerInvite(input: CreateOwnerInviteInput): Promise<
       { merge: true }
     );
   });
+
+  // Best-effort: notify the invitee. Only reached for a genuinely new invite -- the idempotent
+  // early-return above (an existing pending invite) never gets here.
+  const body = `You've been invited to join ${record.tripTitle || "a trip"} — respond to join`;
+  void Promise.all([
+    sendPushNotificationToUsers([input.recipientUserCode], {
+      title: record.tripTitle || "Trip invite",
+      body,
+      data: { tripCode, type: "trip_invite_received" },
+    }),
+    writeNotificationToUsers([input.recipientUserCode], {
+      tripCode,
+      tripTitle: record.tripTitle || "Trip",
+      type: "invite_received",
+      title: "You've been invited",
+      body,
+    }),
+  ]);
 
   return record;
 }
@@ -597,11 +636,28 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
   });
   await batch.commit();
 
+  // Best-effort: notify the requester their own request was approved.
+  const joinerNameForRequester = request.isNewTraveler ? request.matchedTravelerName : request.requesterName;
+  void Promise.all([
+    sendPushNotificationToUsers([request.requesterUserCode], {
+      title: trip?.title || "Trip update",
+      body: `Your request to join ${trip?.title || "the trip"} was approved`,
+      data: { tripCode: code, type: "trip_join_request_approved" },
+    }),
+    writeNotificationToUsers([request.requesterUserCode], {
+      tripCode: code,
+      tripTitle: trip?.title || "Trip",
+      type: "join_request_approved",
+      title: "Request approved",
+      body: `Your request to join ${trip?.title || "the trip"} was approved`,
+    }),
+  ]);
+
   // Best-effort: notify existing trip members that someone joined. Excludes the joiner
   // themselves -- they don't need to be told about their own action.
   void getTripMemberUserCodes(code, request.requesterUserCode).then((memberCodes) => {
     if (memberCodes.length === 0) return;
-    const joinerName = request.isNewTraveler ? request.matchedTravelerName : request.requesterName;
+    const joinerName = joinerNameForRequester;
     const body = `${joinerName} joined the trip`;
     return Promise.all([
       sendPushNotificationToUsers(memberCodes, {
@@ -646,6 +702,22 @@ export async function rejectJoinRequest(tripCode: string, requestId: string, res
     [`traveler_request.${requestId}.resolvedAt`]: new Date().toISOString(),
     [`traveler_request.${requestId}.resolvedBy`]: resolvedByUserCode,
   });
+
+  // Best-effort: notify the requester their request was rejected.
+  void Promise.all([
+    sendPushNotificationToUsers([request.requesterUserCode], {
+      title: request.tripTitle || "Trip update",
+      body: `Your request to join ${request.tripTitle || "the trip"} was declined`,
+      data: { tripCode: code, type: "trip_join_request_rejected" },
+    }),
+    writeNotificationToUsers([request.requesterUserCode], {
+      tripCode: code,
+      tripTitle: request.tripTitle || "Trip",
+      type: "join_request_rejected",
+      title: "Request declined",
+      body: `Your request to join ${request.tripTitle || "the trip"} was declined`,
+    }),
+  ]);
 
   await adminDb
     .collection("user_trip_approval_list")
@@ -846,6 +918,22 @@ export async function declineOwnerInvite(tripCode: string, requestId: string, de
     [`owner_invite.${requestId}.resolvedAt`]: new Date().toISOString(),
     [`owner_invite.${requestId}.resolvedBy`]: decliningUserCode,
   });
+
+  // Best-effort: notify the inviter their invite was declined.
+  void Promise.all([
+    sendPushNotificationToUsers([request.requesterUserCode], {
+      title: request.tripTitle || "Trip update",
+      body: `Your invite to ${request.matchedTravelerName || "a traveler"} was declined`,
+      data: { tripCode: code, type: "trip_invite_declined" },
+    }),
+    writeNotificationToUsers([request.requesterUserCode], {
+      tripCode: code,
+      tripTitle: request.tripTitle || "Trip",
+      type: "invite_declined",
+      title: "Invite declined",
+      body: `Your invite to ${request.matchedTravelerName || "a traveler"} was declined`,
+    }),
+  ]);
 
   await Promise.all([
     adminDb

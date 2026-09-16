@@ -1,6 +1,15 @@
 import { Router } from "express";
 import { GoogleGenAI, Type } from "@google/genai";
 import { resolveAiGeneratedDestination } from "../services/userDestinationsService";
+import { requireAuth } from "../middleware/auth";
+import { adminDb } from "../firebaseAdmin";
+import { checkAndReserveGenerationSlot, logGeneration, grantRewardCredit, getQuotaStatus } from "../services/aiGenerationLogService";
+
+async function resolveUserCode(uid?: string): Promise<string | null> {
+  if (!uid) return null;
+  const snap = await adminDb.collection("users").doc(uid).get();
+  return snap.exists ? (snap.data()!.userCode as string) || null : null;
+}
 
 const router = Router();
 
@@ -274,7 +283,16 @@ function computeUncoveredRanges(
   return ranges.filter((r) => r.start < r.end);
 }
 
-router.post("/generate-itinerary", async (req, res) => {
+router.get("/generation-quota", requireAuth, async (req, res) => {
+  const userCode = await resolveUserCode(req.uid);
+  if (!userCode) {
+    return res.status(403).json({ error: "Could not resolve your user account." });
+  }
+  const status = await getQuotaStatus(userCode);
+  res.json(status);
+});
+
+router.post("/generate-itinerary", requireAuth, async (req, res) => {
   const {
     tripTitle,
     countries,
@@ -293,6 +311,27 @@ router.post("/generate-itinerary", async (req, res) => {
   }
   if (!startDate || !endDate) {
     return res.status(400).json({ error: "Trip start date and end date are required." });
+  }
+
+  const userCode = await resolveUserCode(req.uid);
+  if (!userCode) {
+    return res.status(403).json({ error: "Could not resolve your user account." });
+  }
+
+  // Checked and reserved BEFORE any Gemini call: a reward-type slot atomically spends the user's
+  // credit right here (via a Firestore transaction), which is what prevents two concurrent
+  // requests from both seeing "1 credit available" and both proceeding. If Gemini subsequently
+  // fails and the curated fallback is served instead, the reward credit is refunded in the catch
+  // block below -- a failed generation shouldn't cost the user an ad they already watched.
+  const permission = await checkAndReserveGenerationSlot(userCode);
+  if (!permission.allowed) {
+    return res.status(429).json({
+      error:
+        permission.reason === "daily_limit_reached"
+          ? "You've reached today's plan generation limit."
+          : "Watch a rewarded ad to unlock another plan generation.",
+      reason: permission.reason,
+    });
   }
 
   try {
@@ -422,6 +461,11 @@ CRITICAL RULES:
         }
       }
 
+      // Only reached on a confirmed successful Gemini result -- this is what "only successful
+      // generations count" means in practice: the log entry (and the free/reward count it
+      // contributes to) is written here, never speculatively before this point.
+      await logGeneration(userCode, permission.type);
+
       return res.json({
         tripSummary: parsed.tripSummary,
         itinerary: parsed.itinerary,
@@ -431,6 +475,15 @@ CRITICAL RULES:
     throw new Error("Invalid output from Gemini itinerary generator.");
   } catch (err: any) {
     console.warn("Serving curated fallback itinerary due to Gemini error:", err?.message);
+    if (permission.type === "reward") {
+      // The credit was already atomically spent before the Gemini call (see above) to prevent a
+      // race-condition double-spend -- but Gemini failed, so the user gets the curated fallback
+      // instead of what they watched an ad for. Refund the credit rather than let a Gemini hiccup
+      // cost them an already-watched ad.
+      await grantRewardCredit(userCode).catch((refundErr: any) => {
+        console.error("Failed to refund reward credit after Gemini failure:", refundErr?.message || refundErr);
+      });
+    }
     res.json({ ...generateCuratedFallbackItinerary({ tripTitle, countries, startDate, endDate, cities, pace, interests }), suggestedDestinations: [] });
   }
 });

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { adminDb } from "../firebaseAdmin";
 import { requireAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
-import { getNotificationsForUser, clearNotification, clearAllNotifications } from "../services/inAppNotificationService";
+import { getNotificationsForUser, clearNotification, clearAllNotifications, getNotificationPreferences, setNotificationPreference, NotificationCategory } from "../services/inAppNotificationService";
 
 const router = Router();
 
@@ -44,6 +44,38 @@ router.delete(
     const userCode = await resolveUserCode(req.uid);
     if (!userCode) return res.status(404).json({ error: "User not found." });
     await clearAllNotifications(userCode);
+    res.json({ success: true });
+  })
+);
+
+const VALID_CATEGORIES: NotificationCategory[] = ["trip_membership", "expenses", "checklist", "announcements"];
+
+router.get(
+  "/preferences",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const userCode = await resolveUserCode(req.uid);
+    if (!userCode) return res.status(404).json({ error: "User not found." });
+    const prefs = await getNotificationPreferences(userCode);
+    res.json(prefs);
+  })
+);
+
+router.put(
+  "/preferences/:category",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const userCode = await resolveUserCode(req.uid);
+    if (!userCode) return res.status(404).json({ error: "User not found." });
+    const category = req.params.category as NotificationCategory;
+    if (!VALID_CATEGORIES.includes(category)) {
+      return res.status(400).json({ error: `category must be one of: ${VALID_CATEGORIES.join(", ")}.` });
+    }
+    const { enabled } = req.body || {};
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be a boolean." });
+    }
+    await setNotificationPreference(userCode, category, enabled);
     res.json({ success: true });
   })
 );

@@ -320,7 +320,7 @@ router.get(
 // what was actually saved -- previously these were entirely separate, frontend-sequenced calls,
 // and the trip save could succeed or fail independently of whether the log entries were written
 // (or the reverse: a change could get logged even when the trip save itself silently failed).
-type ChangeEntry = { operation: "created" | "updated" | "deleted"; fieldPath: string; newValue: any };
+type ChangeEntry = { operation: "created" | "updated" | "deleted" | "completed"; fieldPath: string; newValue: any };
 
 function computeTripChanges(oldTrip: any, newTrip: any): ChangeEntry[] {
   const changes: ChangeEntry[] = [];
@@ -368,8 +368,13 @@ function computeTripChanges(oldTrip: any, newTrip: any): ChangeEntry[] {
   const oldChecklist = new Map((oldTrip?.checklist || []).map((c: any) => [c.id, c]));
   for (const item of newTrip.checklist || []) {
     const prior = oldChecklist.get(item.id);
-    if (!prior || JSON.stringify(prior) !== JSON.stringify(item)) {
-      changes.push({ operation: prior ? "updated" : "created", fieldPath: "checklist", newValue: { task: item.task } });
+    if (!prior) {
+      changes.push({ operation: "created", fieldPath: "checklist", newValue: { task: item.task } });
+    } else if (JSON.stringify(prior) !== JSON.stringify(item)) {
+      // A completion transition takes priority over a generic "updated" classification -- even
+      // if the task text also changed in the same save, completing it is the more notable event.
+      const justCompleted = !(prior as any).checked && (item as any).checked;
+      changes.push({ operation: justCompleted ? "completed" : "updated", fieldPath: "checklist", newValue: { task: item.task } });
     }
   }
   const newChecklistIds = new Set((newTrip.checklist || []).map((c: any) => c.id));
@@ -507,6 +512,64 @@ router.put(
       });
     }
 
+    // Best-effort: notify other trip members on any checklist item addition, edit, completion,
+    // or deletion. Same collapse-multiple-into-one behavior and actor exclusion as expenses above.
+    const checklistChanges = changes.filter((c) => c.fieldPath === "checklist");
+    if (checklistChanges.length > 0) {
+      const created = checklistChanges.filter((c) => c.operation === "created");
+      const updated = checklistChanges.filter((c) => c.operation === "updated");
+      const completed = checklistChanges.filter((c) => c.operation === "completed");
+      const deleted = checklistChanges.filter((c) => c.operation === "deleted");
+
+      void getTripMemberUserCodes(code, userCode).then(async (memberCodes) => {
+        if (memberCodes.length === 0) return;
+        const actorName = await resolveUserName(req.uid);
+
+        const jobs: Promise<any>[] = [];
+        if (created.length > 0) {
+          const body =
+            created.length === 1
+              ? `${actorName} added a checklist item: ${created[0].newValue?.task || "Untitled"}`
+              : `${actorName} added ${created.length} checklist items`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_checklist_item_added" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "checklist_item_added", title: "Checklist item added", body, actorName })
+          );
+        }
+        if (updated.length > 0) {
+          const body =
+            updated.length === 1
+              ? `${actorName} updated a checklist item: ${updated[0].newValue?.task || "Untitled"}`
+              : `${actorName} updated ${updated.length} checklist items`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_checklist_item_updated" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "checklist_item_updated", title: "Checklist item updated", body, actorName })
+          );
+        }
+        if (completed.length > 0) {
+          const body =
+            completed.length === 1
+              ? `${actorName} completed a checklist item: ${completed[0].newValue?.task || "Untitled"}`
+              : `${actorName} completed ${completed.length} checklist items`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_checklist_item_completed" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "checklist_item_completed", title: "Checklist item completed", body, actorName })
+          );
+        }
+        if (deleted.length > 0) {
+          const body =
+            deleted.length === 1
+              ? `${actorName} deleted a checklist item: ${deleted[0].newValue?.task || "Untitled"}`
+              : `${actorName} deleted ${deleted.length} checklist items`;
+          jobs.push(
+            sendPushNotificationToUsers(memberCodes, { title: newTrip.title || "Trip update", body, data: { tripCode: code, type: "trip_checklist_item_deleted" } }),
+            writeNotificationToUsers(memberCodes, { tripCode: code, tripTitle: newTrip.title || "Trip", type: "checklist_item_deleted", title: "Checklist item deleted", body, actorName })
+          );
+        }
+        return Promise.all(jobs);
+      });
+    }
+
     res.json({ success: true });
   })
 );
@@ -555,6 +618,11 @@ router.delete(
       if (record.userCode) associatedUserCodes.add(record.userCode);
     }
 
+    // Needed for the notification body below -- fetched before deletion since the trip doc won't
+    // exist to read from afterward.
+    const tripSnapForTitle = await adminDb.collection("trips").doc(code).get();
+    const tripTitleForNotify = tripSnapForTitle.exists ? (tripSnapForTitle.data()?.title as string) || "Trip" : "Trip";
+
     // The atomic core: either the trip is fully gone from every collection that represents
     // "does this trip exist and who's on it," or the delete fails outright and nothing changes.
     // A typical trip has a small, bounded number of associated users, so this batch never
@@ -567,6 +635,27 @@ router.delete(
       coreBatch.set(adminDb.collection("user_trip_association_master").doc(uc), { [code]: FieldValue.delete() }, { merge: true });
     }
     await coreBatch.commit();
+
+    // Best-effort: notify every other associated user the trip is gone -- excludes the person who
+    // did the deleting, since they don't need to be told about their own action.
+    const notifyCodes = Array.from(associatedUserCodes).filter((uc) => uc !== userCode);
+    if (notifyCodes.length > 0) {
+      const body = `${tripTitleForNotify} was deleted`;
+      void Promise.all([
+        sendPushNotificationToUsers(notifyCodes, {
+          title: tripTitleForNotify,
+          body,
+          data: { tripCode: code, type: "trip_deleted" },
+        }),
+        writeNotificationToUsers(notifyCodes, {
+          tripCode: code,
+          tripTitle: tripTitleForNotify,
+          type: "trip_deleted",
+          title: "Trip deleted",
+          body,
+        }),
+      ]);
+    }
 
     // Everything below is best-effort cleanup, deliberately kept outside the atomic core above --
     // none of it represents "does this trip still exist," and the changes subcollection in
@@ -741,12 +830,25 @@ router.delete(
       const memberCodes = await getTripMemberUserCodes(code, String(targetUserCode));
       if (memberCodes.length === 0) return;
       const leavingRecord = Object.values(master?.users || {}).find((u) => u.userCode === targetUserCode);
+      const leavingName = leavingRecord?.displayName || "A traveler";
       const tripSnap = await adminDb.collection("trips").doc(code).get();
-      await sendPushNotificationToUsers(memberCodes, {
-        title: tripSnap.exists ? tripSnap.data()?.title || "Trip update" : "Trip update",
-        body: `${leavingRecord?.displayName || "A traveler"} left the trip`,
-        data: { tripCode: code, type: "trip_member_left" },
-      });
+      const tripTitleForNotify = tripSnap.exists ? tripSnap.data()?.title || "Trip update" : "Trip update";
+      const body = `${leavingName} left the trip`;
+      await Promise.all([
+        sendPushNotificationToUsers(memberCodes, {
+          title: tripTitleForNotify,
+          body,
+          data: { tripCode: code, type: "trip_member_left" },
+        }),
+        writeNotificationToUsers(memberCodes, {
+          tripCode: code,
+          tripTitle: tripTitleForNotify,
+          type: "member_left",
+          title: "Traveler left",
+          body,
+          actorName: leavingName,
+        }),
+      ]);
     })();
   })
 );
@@ -919,6 +1021,13 @@ router.delete(
     const masterRef = adminDb.collection("trip_owner_user_master").doc(code);
     const tripRef = adminDb.collection("trips").doc(code);
 
+    // Captured before the transaction removes this record from the roster -- needed for the
+    // notification below, since after the write there's nothing left to read this from.
+    const removedRecord = master?.users?.[travelerId];
+    const removedUserCode = removedRecord?.userCode;
+    const removedDisplayName = removedRecord?.displayName || "A traveler";
+    const tripTitleForNotify = trip?.title || "the trip";
+
     await adminDb.runTransaction(async (transaction) => {
       const [masterSnap, tripSnap] = await Promise.all([transaction.get(masterRef), transaction.get(tripRef)]);
       const freshMaster = (masterSnap.exists ? masterSnap.data() : master) as TripOwnerUserMaster;
@@ -934,6 +1043,47 @@ router.delete(
         delete nextNames[travelerId];
         transaction.set(tripRef, { travelers: nextTravelers, travelerNames: nextNames }, { merge: true });
       }
+    });
+
+    // Best-effort: notify the removed traveler themselves (only if they had an actual account --
+    // a placeholder that never joined has no one to notify), and notify everyone still on the
+    // trip except the person who performed the removal.
+    if (removedUserCode && removedUserCode !== callerUserCode) {
+      const removedBody = `You were removed from ${tripTitleForNotify}`;
+      void Promise.all([
+        sendPushNotificationToUsers([removedUserCode], {
+          title: tripTitleForNotify,
+          body: removedBody,
+          data: { tripCode: code, type: "trip_member_removed" },
+        }),
+        writeNotificationToUsers([removedUserCode], {
+          tripCode: code,
+          tripTitle: tripTitleForNotify,
+          type: "member_removed",
+          title: "Removed from trip",
+          body: removedBody,
+        }),
+      ]);
+    }
+    void getTripMemberUserCodes(code, callerUserCode).then((memberCodes) => {
+      const otherMemberCodes = memberCodes.filter((uc) => uc !== removedUserCode);
+      if (otherMemberCodes.length === 0) return;
+      const body = `${removedDisplayName} was removed from ${tripTitleForNotify}`;
+      return Promise.all([
+        sendPushNotificationToUsers(otherMemberCodes, {
+          title: tripTitleForNotify,
+          body,
+          data: { tripCode: code, type: "trip_member_removed" },
+        }),
+        writeNotificationToUsers(otherMemberCodes, {
+          tripCode: code,
+          tripTitle: tripTitleForNotify,
+          type: "member_removed",
+          title: "Traveler removed",
+          body,
+          actorName: removedDisplayName,
+        }),
+      ]);
     });
 
     res.json({ success: true });
