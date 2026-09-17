@@ -621,7 +621,14 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
       id: item.id || `glob-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       checked: false,
     }));
-    listEntry = { userCode: request.requesterUserCode, tripCode: code, globalChecklist: gcCopy, outfitDetails: { days: {} } };
+    listEntry = {
+      userCode: request.requesterUserCode,
+      tripCode: code,
+      globalChecklist: gcCopy,
+      outfitDetails: { days: {} },
+      personalChecklistCategories: Array.from(new Set(gcCopy.map((item: any) => item.category).filter(Boolean))),
+      outfitCategories: ["Outfit", "Footwear", "Outerwear", "Accessories", "Evening Wear", "Swimwear", "Other"],
+    };
   }
 
   const batch = adminDb.batch();
@@ -774,7 +781,14 @@ export async function acceptOwnerInvite(tripCode: string, requestId: string, acc
       id: item.id || `glob-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       checked: false,
     }));
-    listEntry = { userCode: acceptingUserCode, tripCode: code, globalChecklist: gcCopy, outfitDetails: { days: {} } };
+    listEntry = {
+      userCode: acceptingUserCode,
+      tripCode: code,
+      globalChecklist: gcCopy,
+      outfitDetails: { days: {} },
+      personalChecklistCategories: Array.from(new Set(gcCopy.map((item: any) => item.category).filter(Boolean))),
+      outfitCategories: ["Outfit", "Footwear", "Outerwear", "Accessories", "Evening Wear", "Swimwear", "Other"],
+    };
   }
 
   // Atomic core: the roster identity update and the resulting access grant either both happen, or

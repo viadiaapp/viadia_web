@@ -137,12 +137,22 @@ export async function writeNotificationToUsers(
 // the client renders this array in the order returned, so the sort direction belongs here, not
 // re-derived on every render client-side.
 export async function getNotificationsForUser(userCode: string, limit = 100): Promise<InAppNotification[]> {
-  const snap = await notificationsCollection(userCode)
-    .where("cleared", "==", false)
-    .orderBy("createdAt", "asc")
-    .limit(limit)
-    .get();
-  return snap.docs.map((d) => d.data() as InAppNotification);
+  // Deliberately no .where("cleared", "==", false) combined with .orderBy("createdAt") -- that
+  // exact combination (equality filter + orderBy on a different field) requires a Firestore
+  // composite index that was never created, causing every call to this function to throw at
+  // runtime (silently swallowed by the frontend's catch block -- notifications simply never
+  // appeared, with no visible error). Ordering by createdAt alone needs no composite index
+  // (Firestore auto-indexes every single field), so the cleared/not-cleared filtering happens in
+  // application code instead. Fetches a generous multiple of the requested limit before filtering,
+  // since cleared documents accumulate over time and would otherwise exhaust a tight fetch before
+  // reaching enough uncleared ones.
+  const fetchCap = Math.max(limit * 3, 200);
+  const snap = await notificationsCollection(userCode).orderBy("createdAt", "desc").limit(fetchCap).get();
+  const uncleared = snap.docs.map((d) => d.data() as InAppNotification).filter((n) => !n.cleared);
+  // Newest-first fetch, sliced to the requested limit, then reversed back to oldest-first --
+  // matching the original "stack from below, most recent at the bottom" ordering the client
+  // expects, same as before this fix.
+  return uncleared.slice(0, limit).reverse();
 }
 
 export async function clearNotification(userCode: string, notificationId: string): Promise<void> {

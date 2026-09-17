@@ -91,8 +91,13 @@ export async function sendPushNotificationToUsers(userCodes: string[], payload: 
 export async function getTripMemberUserCodes(tripCode: string, excludeUserCode?: string | null): Promise<string[]> {
   const snap = await adminDb.collection("trip_owner_user_master").doc(tripCode).get();
   if (!snap.exists) return [];
-  const users = (snap.data()?.users || {}) as Record<string, { userCode?: string }>;
-  return Object.values(users)
-    .map((u) => u.userCode)
-    .filter((code): code is string => !!code && code !== excludeUserCode);
+  const data = snap.data() || {};
+  const users = (data.users || {}) as Record<string, { userCode?: string }>;
+  const codes = new Set<string>();
+  // owner is stored as its own top-level field, separate from the users map -- never part of it.
+  if (data.owner) codes.add(data.owner as string);
+  for (const u of Object.values(users)) {
+    if (u.userCode) codes.add(u.userCode);
+  }
+  return Array.from(codes).filter((code) => code !== excludeUserCode);
 }

@@ -125,7 +125,9 @@ router.post(
   "/",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const ownerUserCode = await resolveUserCode(req.uid);
+    const ownerSnap = await adminDb.collection("users").doc(req.uid!).get();
+    const ownerUserCode = ownerSnap.exists ? (ownerSnap.data()!.userCode as string) || null : null;
+    const ownerEmail = (ownerSnap.exists ? (ownerSnap.data()!.email as string) || "" : "").trim().toLowerCase();
     if (!ownerUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
 
     const trip = req.body?.trip;
@@ -158,6 +160,11 @@ router.post(
     for (const travelerId of travelerIds) {
       if (travelerId === ownerTravelerId) continue; // owner tracked via ownerTravelerId, never in users
       const name = travelerNames[travelerId] || "";
+      if (isEmailLike(name) && ownerEmail && name.trim().toLowerCase() === ownerEmail) {
+        trip.travelers = (trip.travelers || []).filter((id: string) => id !== travelerId);
+        if (trip.travelerNames) delete trip.travelerNames[travelerId];
+        continue;
+      }
 
       if (isEmailLike(name)) {
         const normalizedEmail = name.trim().toLowerCase();
@@ -189,7 +196,17 @@ router.post(
         id: item.id || `glob-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         checked: false,
       }));
-      listEntry = { userCode: ownerUserCode, tripCode: code, globalChecklist: gcCopy, outfitDetails: { days: {} } };
+      const inheritedPersonalCategories = Array.from(
+        new Set(gcCopy.map((item: any) => item.category).filter(Boolean))
+      );
+      listEntry = {
+        userCode: ownerUserCode,
+        tripCode: code,
+        globalChecklist: gcCopy,
+        outfitDetails: { days: {} },
+        personalChecklistCategories: inheritedPersonalCategories,
+        outfitCategories: ["Outfit", "Footwear", "Outerwear", "Accessories", "Evening Wear", "Swimwear", "Other"],
+      };
     }
 
     // The atomic part: every core write here commits together, or none of them do.
@@ -872,7 +889,9 @@ router.post(
     const names: string[] = Array.isArray(req.body?.names) ? req.body.names.filter((n: any) => typeof n === "string" && n.trim()) : [];
     if (names.length === 0) return res.status(400).json({ error: "No traveler names provided." });
 
-    const callerUserCode = await resolveUserCode(req.uid);
+    const callerSnap = await adminDb.collection("users").doc(req.uid!).get();
+    const callerUserCode = callerSnap.exists ? (callerSnap.data()!.userCode as string) || null : null;
+    const callerEmail = (callerSnap.exists ? (callerSnap.data()!.email as string) || "" : "").trim().toLowerCase();
     if (!callerUserCode) return res.status(400).json({ error: "This account has no userCode assigned yet." });
 
     const master = await getMaster(code);
@@ -890,6 +909,12 @@ router.post(
     const pendingSignupInvites: { travelerId: string; email: string }[] = [];
 
     for (const name of names) {
+      // The caller cannot add their own email as a traveler -- they're already on the trip as
+      // its owner/moderator, and this is checked server-side since the client is never the only
+      // enforcement point.
+      if (isEmailLike(name) && callerEmail && name.trim().toLowerCase() === callerEmail) {
+        continue;
+      }
       if (existingNamesLower.has(name.trim().toLowerCase())) {
         duplicates.push(name);
         continue;
@@ -1172,13 +1197,19 @@ router.put(
     if (callerUserCode !== req.params.userCode) {
       return res.status(403).json({ error: "You may only modify your own checklist/outfit data." });
     }
-    const { globalChecklist, outfitDetails } = req.body || {};
-    const result = {
+    const { globalChecklist, outfitDetails, personalChecklistCategories, outfitCategories } = req.body || {};
+    const result: Record<string, any> = {
       userCode: req.params.userCode,
       tripCode: code,
-      globalChecklist: globalChecklist || [],
-      outfitDetails: outfitDetails || { days: {} },
     };
+    // Conditional inclusion, not `field || []` -- a merge write should only touch fields the
+    // caller actually provided. Every current frontend caller always sends all four together, but
+    // this keeps a future partial-update caller from silently wiping categories to empty just by
+    // omitting them.
+    if (globalChecklist !== undefined) result.globalChecklist = globalChecklist;
+    if (outfitDetails !== undefined) result.outfitDetails = outfitDetails;
+    if (personalChecklistCategories !== undefined) result.personalChecklistCategories = personalChecklistCategories;
+    if (outfitCategories !== undefined) result.outfitCategories = outfitCategories;
     await adminDb.collection("user_specific_trip_list").doc(`${req.params.userCode}_${code}`).set(result, { merge: true });
     res.json(result);
   })
