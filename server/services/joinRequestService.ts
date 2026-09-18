@@ -2,6 +2,7 @@ import { adminDb } from "../firebaseAdmin";
 import { FieldValue } from "firebase-admin/firestore";
 import { getTripMemberUserCodes, sendPushNotificationToUsers } from "./pushNotificationService";
 import { writeNotificationToUsers } from "./inAppNotificationService";
+import { sendExistingAccountInviteEmail, sendJoinRequestReviewEmail } from "./emailService";
 
 // Mirrors src/types.ts and src/lib/db.ts exactly -- this is the server-side counterpart to the
 // frontend's join-request implementation (see docs/firebase-blueprint-v2.json's
@@ -39,6 +40,34 @@ export interface TripJoinRequestsDoc {
   tripCode: string;
   traveler_request?: Record<string, TripJoinRequestEntry>;
   owner_invite?: Record<string, TripJoinRequestEntry>;
+  // Owner invited someone by email who has no account yet -- distinct from owner_invite (which
+  // requires a real recipientUserCode to address). Graduates into a real owner_invite entry (and
+  // is removed from here) once that email signs up and processUnmappedEmailSignup runs.
+  unmapped_email_invite?: Record<string, UnmappedEmailInviteEntry>;
+}
+
+// One pending "owner invited this email, but they haven't signed up yet" entry, keyed by the
+// travelerId minted for them at invite time -- the same id this becomes the roster key for once
+// they do sign up and accept. Mirrored into trip_join_requests/{tripCode} so a trip's "not yet
+// part of the trip" section can read all three pending categories from one place, rather than
+// needing a collection-wide scan of unmapped_email_trip_association (which is keyed by email, not
+// trip code, and has no efficient way to query "all pending for trip X" on its own).
+export interface UnmappedEmailInviteEntry {
+  travelerId: string;
+  email: string;
+  inviterUserCode: string;
+  tripTitle: string;
+  createdAt: string;
+}
+
+// unmapped_email_trip_association/{email}: what an owner-invited-by-email person's future
+// account needs to pick up where the invite left off. Keyed by tripCode so a single email that's
+// been invited to several trips before signing up resolves all of them at signup time. Previously
+// just { tripCodes: string[] } -- extended to carry the travelerId directly (rather than
+// discovering it by searching for a same-email placeholder in the roster), since under the
+// current design an email-type invite never creates a roster placeholder to search for at all.
+export interface UnmappedEmailTripAssociation {
+  invites: Record<string, { travelerId: string; inviterUserCode: string; tripTitle: string }>;
 }
 
 export interface UserTripApprovalList {
@@ -143,6 +172,7 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
   const requestsDocRef = adminDb.collection("trip_join_requests").doc(tripCode);
   const masterRef = adminDb.collection("trip_owner_user_master").doc(tripCode);
   let approverUserCodes: Set<string> = new Set();
+  let ownerUserCode: string | null = null;
 
   await adminDb.runTransaction(async (transaction) => {
     const masterSnap = await transaction.get(masterRef);
@@ -150,6 +180,7 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
     const master = masterSnap.data() as TripOwnerUserMaster;
 
     approverUserCodes = new Set<string>();
+    ownerUserCode = master.owner || null;
     if (master.owner) approverUserCodes.add(master.owner);
     for (const record of Object.values(master.users || {})) {
       if (record.role === "moderator" && record.userCode) approverUserCodes.add(record.userCode);
@@ -188,6 +219,19 @@ export async function submitJoinRequest(input: SubmitJoinRequestInput): Promise<
         actorName: record.requesterName,
       }),
     ]);
+  }
+  // Separate email, scoped to the owner specifically (not every moderator) -- they're the one
+  // who actually approves or declines this request.
+  if (ownerUserCode) {
+    void (async () => {
+      const ownerEmail = await getUserEmailByUserCode(ownerUserCode!);
+      if (!ownerEmail) return;
+      await sendJoinRequestReviewEmail({
+        toEmail: ownerEmail,
+        requesterName: record.requesterName,
+        tripTitle: record.tripTitle || "your trip",
+      });
+    })();
   }
 
   return record;
@@ -259,7 +303,7 @@ export async function createOwnerInvite(input: CreateOwnerInviteInput): Promise<
   // Best-effort: notify the invitee. Only reached for a genuinely new invite -- the idempotent
   // early-return above (an existing pending invite) never gets here.
   const body = `You've been invited to join ${record.tripTitle || "a trip"} — respond to join`;
-  void Promise.all([
+  const notifyTasks: Promise<any>[] = [
     sendPushNotificationToUsers([input.recipientUserCode], {
       title: record.tripTitle || "Trip invite",
       body,
@@ -272,7 +316,20 @@ export async function createOwnerInvite(input: CreateOwnerInviteInput): Promise<
       title: "You've been invited",
       body,
     }),
-  ]);
+  ];
+  if (input.recipientEmail) {
+    notifyTasks.push(
+      (async () => {
+        const inviterName = (await getUserNameByUserCode(input.inviterUserCode)) || "A traveler";
+        await sendExistingAccountInviteEmail({
+          toEmail: input.recipientEmail!,
+          inviterName,
+          tripTitle: record.tripTitle || "a trip",
+        });
+      })()
+    );
+  }
+  void Promise.all(notifyTasks);
 
   return record;
 }
@@ -282,17 +339,40 @@ function normalizeEmail(email: string): string {
 }
 
 // Records that tripCode should get an owner_invite for this email once they eventually sign up.
-// Path: unmapped_email_trip_association/{normalizedEmail}, an array field of trip codes --
-// arrayUnion so calling this again for an email already on a trip's list is a safe no-op, and
-// existing entries for other trips aren't disturbed.
-export async function addUnmappedEmailTripAssociation(email: string, tripCode: string): Promise<void> {
+// Path: unmapped_email_trip_association/{normalizedEmail}.invites.{tripCode} -- merge write, so
+// calling this again for an email already on a trip's list just overwrites that trip's entry
+// (same travelerId every time, since the caller always passes the one minted at /travelers time),
+// and existing entries for other trips aren't disturbed. Also mirrors into
+// trip_join_requests/{tripCode}.unmapped_email_invite.{travelerId}, which is what a trip's
+// "not yet part of the trip" section actually reads from -- this collection is keyed by email,
+// not trip code, so there's no efficient way to query "everyone pending for trip X" against it
+// directly.
+export async function addUnmappedEmailTripAssociation(
+  email: string,
+  tripCode: string,
+  travelerId: string,
+  inviterUserCode: string,
+  tripTitle: string
+): Promise<void> {
   const normalizedEmail = normalizeEmail(email);
   const code = tripCode.toUpperCase().trim();
   try {
     await adminDb
       .collection("unmapped_email_trip_association")
       .doc(normalizedEmail)
-      .set({ tripCodes: FieldValue.arrayUnion(code) }, { merge: true });
+      .set({ invites: { [code]: { travelerId, inviterUserCode, tripTitle } } }, { merge: true });
+    await adminDb
+      .collection("trip_join_requests")
+      .doc(code)
+      .set(
+        {
+          tripCode: code,
+          unmapped_email_invite: {
+            [travelerId]: { travelerId, email: normalizedEmail, inviterUserCode, tripTitle, createdAt: new Date().toISOString() },
+          },
+        },
+        { merge: true }
+      );
     console.log(`[addUnmappedEmailTripAssociation] Added ${code} to ${normalizedEmail}'s pending list.`);
   } catch (e) {
     console.error(`[addUnmappedEmailTripAssociation] Failed adding ${code} to ${normalizedEmail}:`, e);
@@ -313,7 +393,9 @@ export async function processUnmappedEmailSignup(email: string, newUserCode: str
     const snap = await docRef.get();
     if (!snap.exists) return;
 
-    const tripCodes: string[] = snap.data()?.tripCodes || [];
+    const invites: Record<string, { travelerId: string; inviterUserCode: string; tripTitle: string }> =
+      snap.data()?.invites || {};
+    const tripCodes = Object.keys(invites);
     if (tripCodes.length === 0) {
       await docRef.delete().catch(() => {});
       return;
@@ -321,39 +403,37 @@ export async function processUnmappedEmailSignup(email: string, newUserCode: str
 
     await Promise.all(
       tripCodes.map(async (tripCode) => {
+        const { travelerId, inviterUserCode, tripTitle } = invites[tripCode];
         try {
           const tripSnap = await adminDb.collection("trips").doc(tripCode).get();
-          if (!tripSnap.exists) return;
-          const trip = tripSnap.data() as { title?: string; status?: string };
-          if (trip.status !== "planned" && trip.status !== "active") return;
+          const trip = tripSnap.exists ? (tripSnap.data() as { title?: string; status?: string }) : null;
+          const qualifies = trip && (trip.status === "planned" || trip.status === "active");
 
-          const master = await getTripOwnerMaster(tripCode);
-          if (!master?.owner) return;
-
-          // The placeholder for this email (with its travelerId already minted) was created when
-          // the owner originally added them as a traveler, before they'd signed up -- find it by
-          // matching the stored email, since master.users is keyed by travelerId, not email.
-          const existingEntry = Object.entries(master.users || {}).find(
-            ([, record]) => record.email && normalizeEmail(record.email) === normalizedEmail
-          );
-          if (!existingEntry) {
-            console.warn(`[processUnmappedEmailSignup] No matching traveler placeholder found for ${normalizedEmail} on trip ${tripCode}, skipping.`);
-            return;
+          if (qualifies) {
+            await createOwnerInvite({
+              tripCode,
+              tripTitle: trip!.title || tripTitle || "",
+              inviterUserCode,
+              travelerId,
+              travelerName: normalizedEmail,
+              recipientUserCode: newUserCode,
+              recipientEmail: normalizedEmail,
+            });
+            console.log(`[processUnmappedEmailSignup] Created owner_invite for ${normalizedEmail} on trip ${tripCode}.`);
+          } else {
+            console.log(`[processUnmappedEmailSignup] Trip ${tripCode} no longer qualifies (missing or completed/cancelled), skipping invite for ${normalizedEmail}.`);
           }
-          const [travelerId, existingRecord] = existingEntry;
-
-          await createOwnerInvite({
-            tripCode,
-            tripTitle: trip.title || "",
-            inviterUserCode: master.owner,
-            travelerId,
-            travelerName: existingRecord.displayName || normalizedEmail,
-            recipientUserCode: newUserCode,
-            recipientEmail: normalizedEmail,
-          });
-          console.log(`[processUnmappedEmailSignup] Created owner_invite for ${normalizedEmail} on trip ${tripCode}.`);
         } catch (e) {
           console.error(`[processUnmappedEmailSignup] Failed processing trip ${tripCode} for ${normalizedEmail}:`, e);
+        } finally {
+          // This entry has graduated into a real owner_invite (or the trip no longer qualifies at
+          // all) either way -- remove it from the trip's pending list so it doesn't sit there
+          // forever, since this whole process only ever runs once per signup, never retried.
+          await adminDb
+            .collection("trip_join_requests")
+            .doc(tripCode)
+            .update({ [`unmapped_email_invite.${travelerId}`]: FieldValue.delete() })
+            .catch(() => {});
         }
       })
     );
@@ -528,6 +608,13 @@ async function getUserNameByUserCode(userCode: string): Promise<string | null> {
   return typeof name === "string" ? name.trim() || null : null;
 }
 
+async function getUserEmailByUserCode(userCode: string): Promise<string | null> {
+  const snap = await adminDb.collection("users").where("userCode", "==", userCode).limit(1).get();
+  if (snap.empty) return null;
+  const email = snap.docs[0].data()?.email;
+  return typeof email === "string" ? email.trim() || null : null;
+}
+
 // Surgically removes a single key from Trip.travelerNames via FieldValue.delete(). Needed
 // because a merge:true .set() write can never do this on its own -- Firestore's merge semantics
 // for nested map fields only add/update keys present in the write payload, they never remove a
@@ -579,18 +666,31 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
   let nextUsers: Record<string, TravelerRecord>;
   let tripUpdate: { travelers?: string[]; travelerNames: Record<string, string> } | null = null;
 
+  // Same name-resolution fallback acceptOwnerInvite already has: trust the name submitted with
+  // the request by default, but try to replace it with the requester's actual account name --
+  // this is what keeps a still-email-shaped name from ever landing in the roster if the submitted
+  // value was ever missing or wrong, rather than relying solely on the frontend having gotten it
+  // right at submit time.
+  let finalName = request.isNewTraveler ? request.matchedTravelerName : request.requesterName;
+  try {
+    const realName = await getUserNameByUserCode(request.requesterUserCode);
+    if (realName) finalName = realName;
+  } catch (e) {
+    console.error("Failed resolving real name for approved join request, keeping submitted name:", e);
+  }
+
   if (request.isNewTraveler) {
     if (trip) {
       const travelers = trip.travelers || [];
       const nextTravelers = travelers.includes(travelerId) ? travelers : [...travelers, travelerId];
       tripUpdate = {
         travelers: nextTravelers,
-        travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.matchedTravelerName },
+        travelerNames: { ...(trip.travelerNames || {}), [travelerId]: finalName },
       };
     }
     nextUsers = {
       ...(master.users || {}),
-      [travelerId]: { role: "companion", userCode: request.requesterUserCode, email: request.requesterEmail, displayName: request.matchedTravelerName },
+      [travelerId]: { role: "companion", userCode: request.requesterUserCode, email: request.requesterEmail, displayName: finalName },
     };
   } else {
     // Existing placeholder matched: the roster key (travelerId) never changes, so every
@@ -601,10 +701,10 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
     role = priorRecord?.role || "companion";
     nextUsers = {
       ...(master.users || {}),
-      [travelerId]: { role, userCode: request.requesterUserCode, email: request.requesterEmail, displayName: request.requesterName },
+      [travelerId]: { role, userCode: request.requesterUserCode, email: request.requesterEmail, displayName: finalName },
     };
     if (trip) {
-      tripUpdate = { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: request.requesterName } };
+      tripUpdate = { travelerNames: { ...(trip.travelerNames || {}), [travelerId]: finalName } };
     }
   }
 
@@ -644,7 +744,7 @@ export async function approveJoinRequest(tripCode: string, requestId: string, re
   await batch.commit();
 
   // Best-effort: notify the requester their own request was approved.
-  const joinerNameForRequester = request.isNewTraveler ? request.matchedTravelerName : request.requesterName;
+  const joinerNameForRequester = finalName;
   void Promise.all([
     sendPushNotificationToUsers([request.requesterUserCode], {
       title: trip?.title || "Trip update",

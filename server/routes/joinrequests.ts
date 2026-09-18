@@ -20,7 +20,7 @@ import {
   addUnmappedEmailTripAssociation,
   processUnmappedEmailSignup,
 } from "../services/joinRequestService";
-import { sendExistingAccountInviteEmail, sendSignupInviteEmail } from "../services/emailService";
+import { sendSignupInviteEmail } from "../services/emailService";
 
 const router = Router();
 
@@ -103,15 +103,6 @@ router.post(
         recipientEmail,
       });
 
-      if (recipientEmail) {
-        const inviterName = await resolveUserName(req.uid);
-        void sendExistingAccountInviteEmail({
-          toEmail: recipientEmail,
-          inviterName,
-          tripTitle: tripTitle || "this trip",
-        });
-      }
-
       res.json({ success: true, request: record });
     } catch (err: any) {
       res.status(400).json({ error: err?.message || "Could not create invite." });
@@ -138,7 +129,8 @@ router.post(
     }
 
     try {
-      await addUnmappedEmailTripAssociation(recipientEmail, tripCode);
+      const travelerId = `T-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      await addUnmappedEmailTripAssociation(recipientEmail, tripCode, travelerId, inviterUserCode, tripTitle || "");
       const inviterName = await resolveUserName(req.uid);
       void sendSignupInviteEmail({
         toEmail: recipientEmail,

@@ -26,4 +26,17 @@ router.get(
   })
 );
 
+// LocationIQ tile access key (see .env.example for where to get one). Public, no auth required --
+// same reasoning as /ads: every client, signed-in or guest, needs this to render a map at all.
+// The key itself is not a secret in the way a server-side credential is -- LocationIQ tile
+// requests go directly from the client to their servers, so the key is visible in that traffic
+// either way; storing it as a backend env var here is for operational convenience (rotate it in
+// one place, no frontend rebuild needed), not to hide it from the client.
+router.get(
+  "/map-tiles",
+  asyncHandler(async (_req, res) => {
+    res.json({ locationIqKey: process.env.LOCATIONIQ_API_KEY || null });
+  })
+);
+
 export default router;

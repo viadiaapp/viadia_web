@@ -167,17 +167,19 @@ router.post(
       }
 
       if (isEmailLike(name)) {
+        // Email entries never get a roster/trip entry here -- same reasoning as the /travelers
+        // endpoint: nothing should appear as a selectable traveler (e.g. in an expense's "paid
+        // by" list) until they've actually been approved, at which point they arrive with a
+        // real, resolved name rather than a placeholder-visible email string.
+        trip.travelers = (trip.travelers || []).filter((id: string) => id !== travelerId);
+        if (trip.travelerNames) delete trip.travelerNames[travelerId];
+
         const normalizedEmail = name.trim().toLowerCase();
         const foundSnap = await adminDb.collection("users").where("email", "==", normalizedEmail).limit(1).get();
         if (!foundSnap.empty) {
           const found = foundSnap.docs[0].data();
-          // Known account: leave only a name placeholder for now -- the real userCode/email isn't
-          // written until they actually accept the invite (acceptOwnerInvite), so no PII sits in
-          // these tables while still pending.
-          users[travelerId] = { role: "companion", userCode: "", email: "", displayName: name };
           if (found?.userCode) pendingInvites.push({ travelerId, name, foundUserCode: found.userCode, foundEmail: found.email || normalizedEmail });
         } else {
-          users[travelerId] = { role: "companion", userCode: "", email: normalizedEmail, displayName: name };
           pendingSignupInvites.push({ travelerId, email: normalizedEmail });
         }
       } else {
@@ -261,7 +263,7 @@ router.post(
     }
     for (const inv of pendingSignupInvites) {
       try {
-        await addUnmappedEmailTripAssociation(inv.email, code);
+        await addUnmappedEmailTripAssociation(inv.email, code, inv.travelerId, ownerUserCode, trip.title || "");
         void sendSignupInviteEmail({ toEmail: inv.email, inviterName, tripTitle: trip.title || "this trip" });
       } catch (e) {
         console.error(`Failed recording signup invite for ${inv.email} on new trip ${code}:`, e);
@@ -811,12 +813,15 @@ router.post(
   })
 );
 
-// Removes a userCode's entry from user_trip_association_master/{targetUserCode}.{code}. A user
-// may always remove their own entry (leaving a trip is always their own choice, regardless of
-// whether trip_owner_user_master still exists -- e.g. after the trip itself was already deleted).
-// Removing someone else's entry requires approveChanges permission on this trip, verified against
-// trip_owner_user_master -- if that record no longer exists, there's no way to verify the caller
-// ever had permission, so this fails closed (403) rather than assuming it's fine.
+// Removes a user from a trip entirely -- from user_trip_association_master (their own
+// association index), trip_owner_user_master.users (the trip's roster), and
+// trips.travelers/travelerNames (the trip's own traveler list), atomically via a transaction. A
+// user may always remove their own entry (leaving a trip is always their own choice, regardless
+// of whether trip_owner_user_master still exists -- e.g. after the trip itself was already
+// deleted). Removing someone else's entry requires approveChanges permission on this trip,
+// verified against trip_owner_user_master -- if that record no longer exists, there's no way to
+// verify the caller ever had permission, so this fails closed (403) rather than assuming it's
+// fine.
 router.delete(
   "/:code/user-role/:userCode",
   requireAuth,
@@ -834,11 +839,48 @@ router.delete(
       }
     }
 
-    await adminDb
-      .collection("user_trip_association_master")
-      .doc(targetUserCode)
-      .update({ [code]: FieldValue.delete() })
-      .catch(() => {});
+    // The roster is keyed by travelerId, not userCode -- find the travelerId whose record matches
+    // this userCode, if any (there may be none, e.g. if trip_owner_user_master no longer exists).
+    const travelerId = master
+      ? Object.entries(master.users || {}).find(([, u]) => u.userCode === targetUserCode)?.[0]
+      : undefined;
+
+    if (travelerId) {
+      const tripSnap = await adminDb.collection("trips").doc(code).get();
+      const trip = tripSnap.exists ? tripSnap.data() : null;
+      const isUsedInExpenses = (trip?.expenses || []).some(
+        (exp: any) => exp.paidBy === travelerId || (exp.splits || []).some((s: any) => s.traveler === travelerId)
+      );
+      if (isUsedInExpenses) {
+        return res.status(409).json({ error: "Cannot remove this traveler because they are linked to recorded expenses." });
+      }
+    }
+
+    const masterRef = adminDb.collection("trip_owner_user_master").doc(code);
+    const tripRef = adminDb.collection("trips").doc(code);
+    const associationRef = adminDb.collection("user_trip_association_master").doc(targetUserCode);
+
+    await adminDb.runTransaction(async (transaction) => {
+      transaction.set(associationRef, { [code]: FieldValue.delete() }, { merge: true });
+
+      if (!travelerId) return; // nothing in the roster/trip data to remove
+
+      const [masterSnap, tripSnap] = await Promise.all([transaction.get(masterRef), transaction.get(tripRef)]);
+      if (masterSnap.exists) {
+        const freshMaster = masterSnap.data() as TripOwnerUserMaster;
+        const nextUsers = { ...(freshMaster.users || {}) };
+        delete nextUsers[travelerId];
+        transaction.set(masterRef, { ...freshMaster, users: nextUsers });
+      }
+      if (tripSnap.exists) {
+        const freshTrip = tripSnap.data()!;
+        const nextTravelers = (freshTrip.travelers || []).filter((id: string) => id !== travelerId);
+        const nextNames = { ...(freshTrip.travelerNames || {}) };
+        delete nextNames[travelerId];
+        transaction.set(tripRef, { travelers: nextTravelers, travelerNames: nextNames }, { merge: true });
+      }
+    });
+
     res.json({ success: true });
 
     // Best-effort: notify the remaining trip members that this person left/was removed.
@@ -881,6 +923,14 @@ router.delete(
 // and a delete, overlapped). The frontend now sends only the raw names; this endpoint resolves
 // each one (email lookup, invite decision) the same way the trip-creation endpoint does, then
 // commits the actual roster/trip changes inside one transaction against fresh data.
+// Adds one or more travelers to a trip. Name entries (not email-like) are immediate planning
+// placeholders -- added straight to the roster/trip data, same as always, since there's no
+// account to wait for. Email entries never touch trip_owner_user_master or trips at all here --
+// they mint a travelerId and go straight to the pending-invite path (matched account: a real
+// owner_invite; no account yet: the unmapped-email path), exactly mirroring how a traveler's own
+// join request never appears in the roster until approved. This is what keeps a not-yet-approved
+// email invite from ever surfacing as a selectable traveler anywhere in the app (e.g. the expense
+// log's "paid by" list) with an unresolved, still-email-shaped name.
 router.post(
   "/:code/travelers",
   requireAuth,
@@ -903,6 +953,22 @@ router.post(
     const trip = (await adminDb.collection("trips").doc(code).get()).data();
     const existingNamesLower = new Set(Object.values(trip?.travelerNames || {}).map((n) => (n as string).toLowerCase()));
     const isEmailLike = (s: string) => /\S+@\S+\.\S+/.test(s);
+
+    // Existing roster members' emails, and every email already pending as an owner_invite or
+    // unmapped_email_invite on this trip -- both checked so re-adding the same email is treated
+    // as a duplicate rather than minting a second, redundant pending invite.
+    const existingMemberEmailsLower = new Set(
+      Object.values(master?.users || {}).map((u) => (u.email || "").toLowerCase()).filter(Boolean)
+    );
+    const requestsDoc = await getTripJoinRequestsDoc(code);
+    const pendingEmailsLower = new Set<string>();
+    for (const entry of Object.values(requestsDoc?.owner_invite || {})) {
+      if (entry.status === "pending" && entry.recipientEmail) pendingEmailsLower.add(entry.recipientEmail.toLowerCase());
+    }
+    for (const entry of Object.values(requestsDoc?.unmapped_email_invite || {})) {
+      pendingEmailsLower.add(entry.email.toLowerCase());
+    }
+
     const toAdd: { travelerId: string; name: string }[] = [];
     const duplicates: string[] = [];
     const pendingInvites: { travelerId: string; name: string; foundUserCode: string; foundEmail: string }[] = [];
@@ -915,16 +981,16 @@ router.post(
       if (isEmailLike(name) && callerEmail && name.trim().toLowerCase() === callerEmail) {
         continue;
       }
-      if (existingNamesLower.has(name.trim().toLowerCase())) {
-        duplicates.push(name);
-        continue;
-      }
-      existingNamesLower.add(name.trim().toLowerCase());
-      const travelerId = `T-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-      toAdd.push({ travelerId, name });
 
       if (isEmailLike(name)) {
         const normalizedEmail = name.trim().toLowerCase();
+        if (existingMemberEmailsLower.has(normalizedEmail) || pendingEmailsLower.has(normalizedEmail)) {
+          duplicates.push(name);
+          continue;
+        }
+        pendingEmailsLower.add(normalizedEmail); // guards against the same email repeated within this same request
+
+        const travelerId = `T-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
         const foundSnap = await adminDb.collection("users").where("email", "==", normalizedEmail).limit(1).get();
         if (!foundSnap.empty) {
           const found = foundSnap.docs[0].data();
@@ -932,13 +998,22 @@ router.post(
         } else {
           pendingSignupInvites.push({ travelerId, email: normalizedEmail });
         }
+        continue;
       }
+
+      // Name entries: immediate planning placeholder, unchanged from before -- there's no account
+      // to wait for, so there's nothing to defer.
+      if (existingNamesLower.has(name.trim().toLowerCase())) {
+        duplicates.push(name);
+        continue;
+      }
+      existingNamesLower.add(name.trim().toLowerCase());
+      const travelerId = `T-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      toAdd.push({ travelerId, name });
     }
 
     const masterRef = adminDb.collection("trip_owner_user_master").doc(code);
     const tripRef = adminDb.collection("trips").doc(code);
-    const pendingInviteIds = new Set(pendingInvites.map((i) => i.travelerId));
-    const pendingSignupIds = new Set(pendingSignupInvites.map((i) => i.travelerId));
 
     if (toAdd.length > 0) {
       await adminDb.runTransaction(async (transaction) => {
@@ -951,10 +1026,7 @@ router.post(
         const nextNames = { ...(freshTrip?.travelerNames || {}) };
 
         for (const { travelerId, name } of toAdd) {
-          const email = pendingInviteIds.has(travelerId) || pendingSignupIds.has(travelerId)
-            ? (pendingSignupIds.has(travelerId) ? name : "")
-            : "";
-          nextUsers[travelerId] = { role: "companion", userCode: "", email, displayName: name };
+          nextUsers[travelerId] = { role: "companion", userCode: "", email: "", displayName: name };
           nextTravelers.push(travelerId);
           nextNames[travelerId] = name;
         }
@@ -985,7 +1057,7 @@ router.post(
     }
     for (const inv of pendingSignupInvites) {
       try {
-        await addUnmappedEmailTripAssociation(inv.email, code);
+        await addUnmappedEmailTripAssociation(inv.email, code, inv.travelerId, callerUserCode, trip?.title || "");
         void sendSignupInviteEmail({ toEmail: inv.email, inviterName, tripTitle: trip?.title || "this trip" });
       } catch (e) {
         console.error(`Failed recording signup invite for ${inv.email} on trip ${code}:`, e);

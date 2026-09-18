@@ -70,8 +70,7 @@ async function sendMail(to: string, subject: string, html: string, text: string)
 }
 
 // Sent once, right after a brand-new account finishes signing up -- not tied to any specific
-// trip or inviter. Not yet called from anywhere; wire this in wherever the signup flow's genuine
-// first-time-account hook lives.
+// trip or inviter. Wired in from routes/users.ts's PUT /me, on the account's very first upsert.
 export async function sendWelcomeEmail(params: {
   toEmail: string;
   userName: string;
@@ -115,6 +114,25 @@ export async function sendSignupInviteEmail(params: {
     TRIP_TITLE: tripTitle,
   });
   const text = `${inviterName} invited you to join "${tripTitle}" on Viadia. Sign up with this email address and your invite will be waiting for you.`;
+  await sendMail(toEmail, subject, html, text);
+}
+
+// Sent to the trip owner when someone submits a join request via the trip's code -- separate
+// from the existing push/in-app notification, which already goes to the owner and any
+// moderators; this email is scoped to the owner specifically, since they're the one who actually
+// approves or declines.
+export async function sendJoinRequestReviewEmail(params: {
+  toEmail: string;
+  requesterName: string;
+  tripTitle: string;
+}): Promise<void> {
+  const { toEmail, requesterName, tripTitle } = params;
+  const subject = `${requesterName} wants to join "${tripTitle}" on Viadia`;
+  const html = renderTemplate("join-request-review.html", {
+    REQUESTER_NAME: requesterName,
+    TRIP_TITLE: tripTitle,
+  });
+  const text = `${requesterName} has asked to join "${tripTitle}" on Viadia. Open the app and review this request from your trip's traveler list.`;
   await sendMail(toEmail, subject, html, text);
 }
 

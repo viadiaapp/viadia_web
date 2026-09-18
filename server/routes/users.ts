@@ -3,6 +3,7 @@ import { adminDb } from "../firebaseAdmin";
 import { requireAuth } from "../middleware/auth";
 import { asyncHandler } from "../utils/asyncHandler";
 import { registerDeviceToken, unregisterDeviceToken } from "../services/pushNotificationService";
+import { sendWelcomeEmail } from "../services/emailService";
 
 const router = Router();
 
@@ -45,6 +46,7 @@ router.put(
   asyncHandler(async (req, res) => {
     const ref = adminDb.collection("users").doc(req.uid!);
     const existing = await ref.get();
+    const isBrandNewAccount = !existing.exists;
     const body = stripRestrictedFields(req.body || {});
     if (typeof body.email === "string") {
       body.email = body.email.trim().toLowerCase();
@@ -58,6 +60,12 @@ router.put(
     await ref.set(payload, { merge: true });
     const updated = await ref.get();
     res.json(updated.data());
+
+    // Best-effort, only once, right after this account's very first PUT /me -- not on every
+    // later profile update, since this same endpoint upserts both.
+    if (isBrandNewAccount && body.email) {
+      void sendWelcomeEmail({ toEmail: body.email, userName: body.name || "there" });
+    }
   })
 );
 
